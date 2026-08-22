@@ -1,6 +1,25 @@
-## Summary
+## Description
 
-Describe the change and the issue it resolves.
+Explain what changed, why the change is needed, and its API or system impact.
+
+## Related issue
+
+Closes #[issue number]
+
+<!-- Replace [issue number] with the assigned issue number. Example: Closes #1 -->
+
+## Type of change
+
+- [ ] Feature
+- [ ] Bug fix
+- [ ] Refactor
+- [ ] Documentation
+- [ ] Test, migration, or build improvement
+
+## Changes made
+
+-
+-
 
 ## Validation
 
@@ -9,9 +28,11 @@ Describe the change and the issue it resolves.
 - [ ] `npm test -- --runInBand`
 - [ ] `npm run build`
 
-## Privacy and Security
+
+## Privacy and security
 
 - [ ] No secrets, signing keys, wallet private material, or real payment records were added.
 - [ ] Public verification output exposes only intentionally disclosed proof data.
+- [ ] Authentication, authorization, rate-limit, and privacy effects were considered.
 - [ ] API documentation matches implemented behavior.
 
