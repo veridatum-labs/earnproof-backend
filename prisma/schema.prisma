@@ -265,12 +265,16 @@ model ApiKey {
   createdBy      User            @relation(fields: [createdById], references: [id])
   name           String
   keyHash        String          @unique
+  keyPrefix      String
+  scopes         String[]
   status         ResourceStatus  @default(ACTIVE)
   lastUsedAt     DateTime?
   expiresAt      DateTime?
+  revokedAt      DateTime?
   createdAt      DateTime        @default(now())
 
   @@index([organizationId, status])
+  @@index([keyHash])
 }
 
 model Webhook {
