@@ -7,6 +7,7 @@ import { DatabaseModule } from "./database/database.module";
 import { HealthModule } from "./health/health.module";
 import { PaymentsModule } from "./payments/payments.module";
 import { ProofsModule } from "./proofs/proofs.module";
+import { WebhooksModule } from "./webhooks/webhooks.module";
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { ProofsModule } from "./proofs/proofs.module";
     HealthModule,
     PaymentsModule,
     ProofsModule,
+    WebhooksModule,
   ],
 })
 export class AppModule {}

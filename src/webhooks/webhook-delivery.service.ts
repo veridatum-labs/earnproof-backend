@@ -1,0 +1,476 @@
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { WebhookDeliveryStatus } from "@prisma/client";
+import { randomUUID } from "crypto";
+import { decryptProtectedAmount } from "../common/crypto/protected-amount";
+import { PrismaService } from "../database/prisma.service";
+import { WebhookEnvelope, WebhookEventType } from "./webhook-event.types";
+import { WebhookSigningService } from "./webhook-signing.service";
+import { SsrfBlockedError, assertSafeWebhookUrl } from "./webhook-ssrf-guard";
+
+/** Maximum stored response body size in bytes (1 KiB). */
+const MAX_RESPONSE_BODY_BYTES = 1024;
+
+/** Delivery timeout in milliseconds. */
+const DELIVERY_TIMEOUT_MS = 10_000;
+
+/** Maximum delivery attempts (1 initial + 4 retries = 5 total). */
+const MAX_ATTEMPTS = 5;
+
+/** Exponential backoff base in milliseconds. */
+const BACKOFF_BASE_MS = 1_000;
+
+/**
+ * Compute delay before attempt `n` (1-indexed).
+ * Attempt 1 = immediate (no delay).
+ * Attempt 2 = 1 s, 3 = 2 s, 4 = 4 s, 5 = 8 s.
+ */
+function backoffMs(attempt: number): number {
+  if (attempt <= 1) return 0;
+  return BACKOFF_BASE_MS * Math.pow(2, attempt - 2);
+}
+
+/**
+ * Per-webhook serialization queue.
+ *
+ * Deliveries for the same webhook endpoint are chained on a single
+ * Promise so they execute strictly in FIFO order and never interleave.
+ * This enforces ordering guarantees per aggregate (webhook endpoint).
+ */
+type WebhookChain = { tail: Promise<void> };
+
+@Injectable()
+export class WebhookDeliveryService implements OnModuleInit {
+  private readonly logger = new Logger(WebhookDeliveryService.name);
+  private readonly encryptionKey: string;
+
+  /**
+   * Per-webhook serialization chains.
+   * Key = webhookId, value = chain whose `tail` is the last enqueued delivery.
+   */
+  private readonly chains = new Map<string, WebhookChain>();
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly signing: WebhookSigningService,
+    configService: ConfigService,
+  ) {
+    this.encryptionKey = configService.getOrThrow<string>("paymentEncryptionKey");
+  }
+
+  /**
+   * On startup, re-enqueue any deliveries that were PENDING when the process
+   * last shut down (handles crash recovery).
+   */
+  async onModuleInit(): Promise<void> {
+    const pending = await this.prisma.webhookDelivery.findMany({
+      where: { status: WebhookDeliveryStatus.PENDING },
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        webhookId: true,
+        attempt: true,
+        nextRetryAt: true,
+      },
+    });
+
+    for (const delivery of pending) {
+      const delay = delivery.nextRetryAt
+        ? Math.max(0, delivery.nextRetryAt.getTime() - Date.now())
+        : 0;
+      this.scheduleDelivery(delivery.id, delivery.webhookId, delay);
+    }
+
+    if (pending.length > 0) {
+      this.logger.log(`Re-enqueued ${pending.length} pending delivery(-ies) on startup`);
+    }
+  }
+
+  /**
+   * Enqueue a new webhook event for all active, subscribing endpoints
+   * belonging to the organisations the user is a member of.
+   *
+   * Called by ProofsService after each lifecycle event.
+   */
+  async enqueueForUser(
+    userId: string,
+    eventType: WebhookEventType,
+    envelope: Omit<WebhookEnvelope, "id" | "specVersion" | "createdAt">,
+  ): Promise<void> {
+    // Resolve which organisations the user belongs to
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        organizations: {
+          select: { id: true },
+        },
+      },
+    });
+    if (!user || user.organizations.length === 0) return;
+
+    const orgIds = user.organizations.map((o) => o.id);
+    const webhooks = await this.prisma.webhook.findMany({
+      where: {
+        organizationId: { in: orgIds },
+        status: "ACTIVE",
+      },
+      select: {
+        id: true,
+        url: true,
+        secretEncrypted: true,
+        events: true,
+      },
+    });
+
+    for (const hook of webhooks) {
+      const subscribedEvents = this.parseEvents(hook.events);
+      if (!subscribedEvents.includes(eventType)) continue;
+
+      const eventId = randomUUID();
+      const fullEnvelope: WebhookEnvelope = {
+        specVersion: "1",
+        id: eventId,
+        event: eventType,
+        createdAt: new Date().toISOString(),
+        data: envelope.data,
+      };
+
+      const delivery = await this.prisma.webhookDelivery.create({
+        data: {
+          webhookId: hook.id,
+          eventType,
+          eventId,
+          attempt: 1,
+          status: WebhookDeliveryStatus.PENDING,
+        },
+        select: { id: true },
+      });
+
+      this.scheduleDelivery(delivery.id, hook.id, 0, fullEnvelope, hook.url, hook.secretEncrypted);
+    }
+  }
+
+  /**
+   * Re-deliver a delivery that already has a persisted `WebhookDelivery` row.
+   * Called by the replay endpoint.
+   *
+   * Returns the new delivery id created for the replay attempt.
+   */
+  async replay(
+    originalDeliveryId: string,
+    replayedBy: string,
+  ): Promise<string> {
+    const original = await this.prisma.webhookDelivery.findUnique({
+      where: { id: originalDeliveryId },
+      include: {
+        webhook: {
+          select: {
+            id: true,
+            url: true,
+            secretEncrypted: true,
+            status: true,
+            events: true,
+          },
+        },
+      },
+    });
+
+    if (!original) {
+      throw new Error("WebhookDelivery not found");
+    }
+
+    if (original.webhook.status !== "ACTIVE") {
+      throw new Error("Cannot replay delivery for a disabled webhook endpoint");
+    }
+
+    // Replay is idempotent per (originalDeliveryId, replayedBy): re-using
+    // the same eventId in the envelope means integrators can deduplicate on
+    // X-EarnProof-Delivery just like they do for normal retries.
+    const replayDelivery = await this.prisma.webhookDelivery.create({
+      data: {
+        webhookId: original.webhookId,
+        eventType: original.eventType,
+        eventId: original.eventId, // same eventId → integrator deduplicates
+        attempt: 1,
+        status: WebhookDeliveryStatus.PENDING,
+        replayOf: originalDeliveryId,
+        replayedBy,
+      },
+      select: { id: true },
+    });
+
+    this.scheduleDelivery(replayDelivery.id, original.webhookId, 0);
+
+    return replayDelivery.id;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internal scheduling helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Schedule a delivery to run after `delayMs` milliseconds, serialised
+   * behind any already-running delivery for the same webhook.
+   *
+   * `envelope`, `url`, and `secretEncrypted` are optional: if omitted the
+   * worker will re-fetch from the database.  They are passed on the first
+   * attempt (from `enqueueForUser`) to avoid an extra round-trip.
+   */
+  private scheduleDelivery(
+    deliveryId: string,
+    webhookId: string,
+    delayMs: number,
+    envelope?: WebhookEnvelope,
+    url?: string,
+    secretEncrypted?: string,
+  ): void {
+    const existing = this.chains.get(webhookId);
+    const tail = existing?.tail ?? Promise.resolve();
+
+    const next = tail.then(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(async () => {
+            try {
+              await this.runDelivery(deliveryId, envelope, url, secretEncrypted);
+            } catch {
+              // runDelivery swallows its own errors and logs them;
+              // we must not let an uncaught rejection break the chain.
+            }
+            resolve();
+          }, delayMs);
+        }),
+    );
+
+    this.chains.set(webhookId, { tail: next });
+  }
+
+  /**
+   * Execute one delivery attempt.  On failure, either schedules a retry
+   * (if attempts remain) or marks the delivery FAILED permanently.
+   */
+  private async runDelivery(
+    deliveryId: string,
+    cachedEnvelope?: WebhookEnvelope,
+    cachedUrl?: string,
+    cachedSecretEncrypted?: string,
+  ): Promise<void> {
+    const delivery = await this.prisma.webhookDelivery.findUnique({
+      where: { id: deliveryId },
+      include: {
+        webhook: {
+          select: {
+            id: true,
+            url: true,
+            secretEncrypted: true,
+            status: true,
+          },
+        },
+      },
+    });
+
+    if (!delivery) {
+      this.logger.warn(`Delivery ${deliveryId} not found; skipping`);
+      return;
+    }
+
+    // If the endpoint was disabled between scheduling and execution, bail.
+    if (delivery.webhook.status !== "ACTIVE") {
+      await this.prisma.webhookDelivery.update({
+        where: { id: deliveryId },
+        data: {
+          status: WebhookDeliveryStatus.FAILED,
+          failureReason: "webhook endpoint disabled before delivery",
+        },
+      });
+      return;
+    }
+
+    const url = cachedUrl ?? delivery.webhook.url;
+    const secretEncrypted = cachedSecretEncrypted ?? delivery.webhook.secretEncrypted;
+
+    // Decrypt signing secret — never stored in plain text or in delivery logs.
+    let signingSecret: string;
+    try {
+      signingSecret = decryptProtectedAmount(secretEncrypted, this.encryptionKey);
+    } catch (err) {
+      this.logger.error(
+        `Failed to decrypt signing secret for webhook ${delivery.webhook.id}: ${String(err)}`,
+      );
+      await this.prisma.webhookDelivery.update({
+        where: { id: deliveryId },
+        data: {
+          status: WebhookDeliveryStatus.FAILED,
+          failureReason: "signing secret decryption failure",
+        },
+      });
+      return;
+    }
+
+    // Build the envelope if not cached (e.g. after a restart).
+    // We do not re-fetch the original event data; the eventId + eventType
+    // stored on the delivery is enough for the integrator to identify it.
+    // For a full payload, pass the envelope at enqueue time (first attempt).
+    const envelope: WebhookEnvelope = cachedEnvelope ?? {
+      specVersion: "1",
+      id: delivery.eventId,
+      event: delivery.eventType as WebhookEventType,
+      createdAt: delivery.createdAt.toISOString(),
+      data: {} as never, // payload unavailable after restart; integrator sees eventId
+    };
+
+    const body = JSON.stringify(envelope);
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    const signature = this.signing.sign(signingSecret, timestamp, delivery.eventId, body);
+
+    let statusCode: number | undefined;
+    let responseBody: string | undefined;
+    let durationMs: number | undefined;
+    let success = false;
+    let failureReason: string | undefined;
+
+    const start = Date.now();
+    try {
+      assertSafeWebhookUrl(url);
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-EarnProof-Timestamp": String(timestamp),
+          "X-EarnProof-Delivery": delivery.eventId,
+          "X-EarnProof-Event": delivery.eventType,
+          "X-EarnProof-Signature": signature,
+        },
+        body,
+        // Do NOT follow redirects — prevents an open redirect from
+        // forwarding a signed payload to an internal address.
+        redirect: "error",
+        signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
+      });
+
+      durationMs = Date.now() - start;
+      statusCode = response.status;
+
+      // Truncate response body to prevent large payloads in logs.
+      const rawText = await response.text();
+      responseBody = rawText.length > MAX_RESPONSE_BODY_BYTES
+        ? rawText.slice(0, MAX_RESPONSE_BODY_BYTES) + "…[truncated]"
+        : rawText;
+
+      success = response.ok;
+      if (!success) {
+        failureReason = `HTTP ${response.status}`;
+      }
+    } catch (err) {
+      durationMs = Date.now() - start;
+      if (err instanceof SsrfBlockedError) {
+        failureReason = err.message;
+        // SSRF block is permanent — do not retry.
+        await this.prisma.webhookDelivery.update({
+          where: { id: deliveryId },
+          data: {
+            status: WebhookDeliveryStatus.FAILED,
+            durationMs,
+            failureReason,
+            deliveredAt: new Date(),
+          },
+        });
+        this.logger.warn(`Delivery ${deliveryId} blocked by SSRF guard: ${failureReason}`);
+        return;
+      }
+      failureReason = err instanceof Error ? err.message : String(err);
+    }
+
+    if (success) {
+      await this.prisma.webhookDelivery.update({
+        where: { id: deliveryId },
+        data: {
+          status: WebhookDeliveryStatus.SUCCESS,
+          statusCode,
+          // Redact secrets: responseBody is from the integrator, safe to store.
+          responseBody,
+          durationMs,
+          deliveredAt: new Date(),
+        },
+      });
+      this.logger.log(
+        `Delivery ${deliveryId} succeeded (attempt ${delivery.attempt}, ${durationMs}ms, HTTP ${statusCode})`,
+      );
+      return;
+    }
+
+    // Failed attempt — decide whether to retry.
+    if (delivery.attempt >= MAX_ATTEMPTS) {
+      await this.prisma.webhookDelivery.update({
+        where: { id: deliveryId },
+        data: {
+          status: WebhookDeliveryStatus.FAILED,
+          statusCode,
+          responseBody,
+          durationMs,
+          failureReason,
+          deliveredAt: new Date(),
+        },
+      });
+      this.logger.warn(
+        `Delivery ${deliveryId} permanently failed after ${delivery.attempt} attempt(s): ${failureReason}`,
+      );
+      return;
+    }
+
+    // Create a new delivery row for the retry (preserves the original row's
+    // first-attempt record and makes each attempt queryable individually).
+    const nextAttempt = delivery.attempt + 1;
+    const delay = backoffMs(nextAttempt);
+    const nextRetryAt = new Date(Date.now() + delay);
+
+    // Update current row to reflect it failed but a retry is scheduled.
+    await this.prisma.webhookDelivery.update({
+      where: { id: deliveryId },
+      data: {
+        status: WebhookDeliveryStatus.FAILED,
+        statusCode,
+        responseBody,
+        durationMs,
+        failureReason,
+        deliveredAt: new Date(),
+      },
+    });
+
+    const retryDelivery = await this.prisma.webhookDelivery.create({
+      data: {
+        webhookId: delivery.webhookId,
+        eventType: delivery.eventType,
+        eventId: delivery.eventId, // same eventId across all retries
+        attempt: nextAttempt,
+        status: WebhookDeliveryStatus.PENDING,
+        replayOf: delivery.replayOf, // carry through if this is a replay
+        nextRetryAt,
+      },
+      select: { id: true },
+    });
+
+    this.logger.log(
+      `Delivery ${deliveryId} failed (attempt ${delivery.attempt}); retrying as ${retryDelivery.id} in ${delay}ms`,
+    );
+
+    // Schedule retry on the same per-webhook chain to preserve ordering.
+    this.scheduleDelivery(
+      retryDelivery.id,
+      delivery.webhookId,
+      delay,
+      cachedEnvelope, // pass through so full payload is available
+      cachedUrl,
+      cachedSecretEncrypted,
+    );
+  }
+
+  private parseEvents(events: unknown): WebhookEventType[] {
+    if (Array.isArray(events)) {
+      return events.filter((e): e is WebhookEventType => typeof e === "string");
+    }
+    return [];
+  }
+}

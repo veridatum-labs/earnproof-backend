@@ -18,6 +18,7 @@ import { AuthenticatedUser } from "../auth/auth.types";
 import { sha256 } from "../common/crypto/hash";
 import { decryptProtectedAmount } from "../common/crypto/protected-amount";
 import { PrismaService } from "../database/prisma.service";
+import { WebhookDeliveryService } from "../webhooks/webhook-delivery.service";
 import { ContractAnchoringService } from "./contract-anchoring.service";
 import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.dto";
 
@@ -60,6 +61,8 @@ export class ProofsService {
     configService: ConfigService,
     @Optional()
     private readonly contractAnchoringService?: ContractAnchoringService,
+    @Optional()
+    private readonly webhookDeliveryService?: WebhookDeliveryService,
   ) {
     this.signingSecret = configService.getOrThrow<string>(
       "credentialSigningSecret",
@@ -226,7 +229,7 @@ export class ProofsService {
       });
     }
 
-    return {
+    const result = {
       proofId: proof.id,
       status: proof.status,
       verificationUrl: `/api/v1/proofs/${proof.id}/verify`,
@@ -236,6 +239,30 @@ export class ProofsService {
         reason: "disabled",
       },
     };
+
+    // Emit proof.created webhook — fire-and-forget, must not throw.
+    void this.webhookDeliveryService?.enqueueForUser(user.id, "proof.created", {
+      event: "proof.created",
+      data: {
+        proofId: proof.id,
+        proofType: proof.proofType,
+        schemaVersion: proof.schemaVersion,
+        status: proof.status,
+        network: proof.network,
+        assetCode: proof.assetCode,
+        assetIssuer: proof.assetIssuer,
+        periodStart: proof.periodStart?.toISOString() ?? null,
+        periodEnd: proof.periodEnd?.toISOString() ?? null,
+        expiresAt: proof.expiresAt.toISOString(),
+        credentialHash: proof.credentialHash,
+        contractTransactionHash: anchorResult?.anchored
+          ? (anchorResult.transactionHash ?? null)
+          : null,
+        issuedAt: proof.createdAt.toISOString(),
+      },
+    });
+
+    return result;
   }
 
   async revokeProof(userId: string, proofId: string) {
@@ -275,6 +302,16 @@ export class ProofsService {
         id: true,
         status: true,
         revokedAt: true,
+      },
+    });
+
+    // Emit proof.revoked webhook — fire-and-forget, must not throw.
+    void this.webhookDeliveryService?.enqueueForUser(userId, "proof.revoked", {
+      event: "proof.revoked",
+      data: {
+        proofId: updated.id,
+        status: updated.status,
+        revokedAt: updated.revokedAt!.toISOString(),
       },
     });
 
@@ -351,6 +388,16 @@ export class ProofsService {
       data: {
         proofId: proof.id,
         result,
+      },
+    });
+
+    // Emit proof.verified webhook — fire-and-forget, must not throw.
+    void this.webhookDeliveryService?.enqueueForUser(proof.userId, "proof.verified", {
+      event: "proof.verified",
+      data: {
+        proofId: proof.id,
+        result,
+        verifiedAt: new Date().toISOString(),
       },
     });
 
