@@ -1,0 +1,459 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+  Optional,
+} from "@nestjs/common";
+import { Prisma, ResourceStatus } from "@prisma/client";
+import { createHash } from "crypto";
+import { AuthenticatedUser } from "../auth/auth.types";
+import { PrismaService } from "../database/prisma.service";
+import { ContractAnchoringService } from "../proofs/contract-anchoring.service";
+import { CreateIssuerDto } from "./dto/create-issuer.dto";
+import { IssuerPublicResponseDto, IssuerResponseDto } from "./dto/issuer-response.dto";
+import { ListIssuersDto } from "./dto/list-issuers.dto";
+import { SyncIssuerStatusResponseDto } from "./dto/sync-issuer-status.dto";
+import { UpdateIssuerMetadataDto } from "./dto/update-issuer-metadata.dto";
+import { UpdateIssuerStatusDto } from "./dto/update-issuer-status.dto";
+
+// Allowlisted metadata fields for public responses
+const ALLOWLISTED_METADATA_FIELDS = ["name", "description", "logoUrl"];
+
+// Valid status transitions
+const VALID_TRANSITIONS: Record<ResourceStatus, ResourceStatus[]> = {
+  [ResourceStatus.PENDING]: [ResourceStatus.ACTIVE],
+  [ResourceStatus.ACTIVE]: [ResourceStatus.SUSPENDED, ResourceStatus.REVOKED],
+  [ResourceStatus.SUSPENDED]: [ResourceStatus.ACTIVE, ResourceStatus.REVOKED],
+  [ResourceStatus.REVOKED]: [],
+  [ResourceStatus.DELETED]: [],
+};
+
+@Injectable()
+export class IssuersService {
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional()
+    private readonly contractAnchoringService?: ContractAnchoringService,
+  ) {}
+
+  async createIssuer(
+    user: AuthenticatedUser,
+    input: CreateIssuerDto,
+  ): Promise<IssuerResponseDto> {
+    if (user.role !== "ADMIN") {
+      throw new ForbiddenException("Only admins can create issuers");
+    }
+
+    // Verify organization exists and user has access
+    const org = await this.prisma.organization.findUnique({
+      where: { id: input.organizationId },
+    });
+
+    if (!org) {
+      throw new NotFoundException(
+        `Organization with ID "${input.organizationId}" not found`,
+      );
+    }
+
+    // Check if admin is organization creator (admins can manage any org, but log it)
+    if (user.role !== "ADMIN" && org.createdById !== user.id) {
+      throw new ForbiddenException(
+        "You do not have permission to manage this organization",
+      );
+    }
+
+    // Check if issuer with this stellar address already exists
+    const existing = await this.prisma.issuer.findUnique({
+      where: { stellarAddress: input.stellarAddress },
+    });
+
+    if (existing) {
+      throw new ConflictException(
+        `Issuer with Stellar address "${input.stellarAddress}" already exists`,
+      );
+    }
+
+    // Validate Stellar address format (basic check)
+    if (!this.isValidStellarAddress(input.stellarAddress)) {
+      throw new BadRequestException("Invalid Stellar public key format");
+    }
+
+    const metadataHash = input.publicMetadata
+      ? this.hashMetadata(input.publicMetadata)
+      : null;
+
+    const issuer = await this.prisma.issuer.create({
+      data: {
+        organizationId: input.organizationId,
+        stellarAddress: input.stellarAddress,
+        status: ResourceStatus.PENDING,
+        metadataHash,
+      },
+    });
+
+    // Log audit event
+    await this.createAuditLog(user, "CREATE", "Issuer", issuer.id, {
+      organizationId: input.organizationId,
+      stellarAddress: input.stellarAddress,
+      publicMetadata: input.publicMetadata,
+    });
+
+    return this.toResponseDto(issuer);
+  }
+
+  async updateIssuerMetadata(
+    user: AuthenticatedUser,
+    issuerId: string,
+    input: UpdateIssuerMetadataDto,
+  ): Promise<IssuerResponseDto> {
+    if (user.role !== "ADMIN") {
+      throw new ForbiddenException("Only admins can update issuer metadata");
+    }
+
+    const issuer = await this.getIssuerById(issuerId);
+    const metadataHash = this.hashMetadata(input.publicMetadata);
+
+    const updated = await this.prisma.issuer.update({
+      where: { id: issuerId },
+      data: {
+        metadataHash,
+      },
+    });
+
+    // Log audit event
+    await this.createAuditLog(user, "UPDATE_METADATA", "Issuer", issuerId, {
+      previousMetadataHash: issuer.metadataHash,
+      newMetadataHash: metadataHash,
+      publicMetadata: input.publicMetadata,
+    });
+
+    return this.toResponseDto(updated);
+  }
+
+  async updateIssuerStatus(
+    user: AuthenticatedUser,
+    issuerId: string,
+    input: UpdateIssuerStatusDto,
+  ): Promise<IssuerResponseDto> {
+    if (user.role !== "ADMIN") {
+      throw new ForbiddenException("Only admins can update issuer status");
+    }
+
+    const issuer = await this.getIssuerById(issuerId);
+
+    // Validate status transition
+    const validNextStatuses = VALID_TRANSITIONS[issuer.status];
+    if (!validNextStatuses.includes(input.status)) {
+      throw new BadRequestException(
+        `Invalid status transition: ${issuer.status} → ${input.status}. ` +
+        `Valid transitions from ${issuer.status} are: ${validNextStatuses.join(", ") || "none"}`,
+      );
+    }
+
+    const now = new Date();
+    const updateData: any = {
+      status: input.status,
+    };
+
+    // Update timestamp fields based on transition
+    if (input.status === ResourceStatus.ACTIVE && issuer.status === ResourceStatus.PENDING) {
+      updateData.verifiedAt = now;
+    } else if (input.status === ResourceStatus.SUSPENDED && issuer.status === ResourceStatus.ACTIVE) {
+      updateData.suspendedAt = now;
+    } else if (input.status === ResourceStatus.REVOKED) {
+      updateData.revokedAt = now;
+    }
+
+    const updated = await this.prisma.issuer.update({
+      where: { id: issuerId },
+      data: updateData,
+    });
+
+    // Log audit event
+    await this.createAuditLog(user, "UPDATE_STATUS", "Issuer", issuerId, {
+      previousStatus: issuer.status,
+      newStatus: input.status,
+      timestamp: now.toISOString(),
+    });
+
+    return this.toResponseDto(updated);
+  }
+
+  async getIssuer(issuerId: string): Promise<IssuerResponseDto> {
+    const issuer = await this.getIssuerById(issuerId);
+    return this.toResponseDto(issuer);
+  }
+
+  async getIssuerPublic(issuerId: string): Promise<IssuerPublicResponseDto> {
+    const issuer = await this.getIssuerById(issuerId);
+
+    // For public endpoint, only expose allowlisted metadata
+    const publicMetadata = issuer.metadataHash
+      ? this.extractAllowlistedMetadata(issuer.metadataHash)
+      : {};
+
+    return {
+      id: issuer.id,
+      stellarAddress: issuer.stellarAddress,
+      trustStatus: this.computeTrustStatus(issuer),
+      publicMetadata,
+      createdAt: issuer.createdAt,
+    };
+  }
+
+  async listIssuers(query: ListIssuersDto): Promise<{
+    items: IssuerResponseDto[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
+    const page = query.page || 1;
+    const limit = Math.min(query.limit || 20, 100);
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.IssuerWhereInput = {};
+    if (query.status) {
+      where.status = query.status;
+    }
+    if (query.organizationId) {
+      where.organizationId = query.organizationId;
+    }
+
+    const [items, total] = await Promise.all([
+      this.prisma.issuer.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: "desc" },
+      }),
+      this.prisma.issuer.count({ where }),
+    ]);
+
+    return {
+      items: items.map((issuer) => this.toResponseDto(issuer)),
+      total,
+      page,
+      limit,
+    };
+  }
+
+  async listIssuersPublic(query: ListIssuersDto): Promise<{
+    items: IssuerPublicResponseDto[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
+    const page = query.page || 1;
+    const limit = Math.min(query.limit || 20, 100);
+    const skip = (page - 1) * limit;
+
+    // Public endpoint only shows active/trusted issuers
+    const where: Prisma.IssuerWhereInput = {
+      status: {
+        in: [ResourceStatus.ACTIVE, ResourceStatus.PENDING],
+      },
+    };
+
+    if (query.organizationId) {
+      where.organizationId = query.organizationId;
+    }
+
+    const [items, total] = await Promise.all([
+      this.prisma.issuer.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: "desc" },
+      }),
+      this.prisma.issuer.count({ where }),
+    ]);
+
+    return {
+      items: items.map((issuer) => {
+        const publicMetadata = issuer.metadataHash
+          ? this.extractAllowlistedMetadata(issuer.metadataHash)
+          : {};
+
+        return {
+          id: issuer.id,
+          stellarAddress: issuer.stellarAddress,
+          trustStatus: this.computeTrustStatus(issuer),
+          publicMetadata,
+          createdAt: issuer.createdAt,
+        };
+      }),
+      total,
+      page,
+      limit,
+    };
+  }
+
+  async syncIssuerStatus(
+    user: AuthenticatedUser,
+    issuerId: string,
+  ): Promise<SyncIssuerStatusResponseDto> {
+    if (user.role !== "ADMIN") {
+      throw new ForbiddenException("Only admins can sync issuer status");
+    }
+
+    const issuer = await this.getIssuerById(issuerId);
+
+    // If contract anchoring is disabled, return disabled state
+    if (!this.contractAnchoringService) {
+      return {
+        issuerId,
+        synced: false,
+        reason: "disabled",
+        currentStatus: issuer.status,
+      };
+    }
+
+    try {
+      // For issuers, we sync their status to the contract
+      // This records the issuer's trust status on-chain
+      const commitment = JSON.stringify({
+        issuerId: issuer.id,
+        stellarAddress: issuer.stellarAddress,
+        status: issuer.status,
+        timestamp: new Date().toISOString(),
+      });
+
+      const result = await this.contractAnchoringService.anchorProof({
+        proofId: `issuer:${issuer.id}`,
+        commitment,
+        expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year
+      });
+
+      if (result.anchored) {
+        // Record the sync attempt
+        await this.createAuditLog(user, "SYNC_STATUS", "Issuer", issuerId, {
+          transactionHash: result.transactionHash,
+          status: issuer.status,
+          syncedAt: new Date().toISOString(),
+        });
+
+        return {
+          issuerId,
+          synced: true,
+          transactionHash: result.transactionHash,
+          currentStatus: issuer.status,
+        };
+      } else {
+        // Record failed sync
+        await this.createAuditLog(user, "SYNC_STATUS_FAILED", "Issuer", issuerId, {
+          reason: result.reason,
+          error: result.error,
+          status: issuer.status,
+          syncedAt: new Date().toISOString(),
+        });
+
+        return {
+          issuerId,
+          synced: false,
+          reason: result.reason,
+          error: result.error,
+          currentStatus: issuer.status,
+        };
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+      await this.createAuditLog(user, "SYNC_STATUS_ERROR", "Issuer", issuerId, {
+        error: errorMessage,
+        status: issuer.status,
+        syncedAt: new Date().toISOString(),
+      });
+
+      return {
+        issuerId,
+        synced: false,
+        reason: "failed",
+        error: errorMessage,
+        currentStatus: issuer.status,
+      };
+    }
+  }
+
+  async getIssuerById(issuerId: string) {
+    const issuer = await this.prisma.issuer.findUnique({
+      where: { id: issuerId },
+    });
+
+    if (!issuer) {
+      throw new NotFoundException(`Issuer with ID "${issuerId}" not found`);
+    }
+
+    return issuer;
+  }
+
+  private computeTrustStatus(
+    issuer: any,
+  ): "TRUSTED" | "PENDING" | "SUSPENDED" | "REVOKED" {
+    if (issuer.revokedAt) return "REVOKED";
+    if (issuer.suspendedAt) return "SUSPENDED";
+    if (issuer.verifiedAt) return "TRUSTED";
+    return "PENDING";
+  }
+
+  private extractAllowlistedMetadata(
+    metadataHash: string,
+  ): Record<string, any> {
+    // In a real implementation, we would store metadata separately
+    // and retrieve it here. For now, return empty object since
+    // we only store the hash in the Issuer model.
+    // This is a placeholder for the architecture.
+    return {};
+  }
+
+  private hashMetadata(metadata: Record<string, any>): string {
+    const json = JSON.stringify(metadata);
+    return createHash("sha256").update(json).digest("hex");
+  }
+
+  private isValidStellarAddress(address: string): boolean {
+    // Basic Stellar public key validation (G prefix and 56 characters)
+    return /^G[A-Z2-7]{55}$/.test(address);
+  }
+
+  private toResponseDto(issuer: any): IssuerResponseDto {
+    return {
+      id: issuer.id,
+      organizationId: issuer.organizationId,
+      stellarAddress: issuer.stellarAddress,
+      status: issuer.status,
+      metadataHash: issuer.metadataHash,
+      verifiedAt: issuer.verifiedAt,
+      suspendedAt: issuer.suspendedAt,
+      revokedAt: issuer.revokedAt,
+      createdAt: issuer.createdAt,
+      updatedAt: issuer.updatedAt,
+    };
+  }
+
+  private async createAuditLog(
+    user: AuthenticatedUser,
+    action: string,
+    resourceType: string,
+    resourceId: string,
+    metadata: any,
+  ) {
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorType: "User",
+          action,
+          resourceType,
+          resourceId,
+          metadata,
+          createdAt: new Date(),
+        },
+      });
+    } catch (error) {
+      // Audit logging failures should not break operations
+      console.warn("Failed to create audit log:", error);
+    }
+  }
+}

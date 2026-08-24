@@ -5,6 +5,8 @@ import { configuration } from "./config/configuration";
 import { validateEnv } from "./config/env.validation";
 import { DatabaseModule } from "./database/database.module";
 import { HealthModule } from "./health/health.module";
+import { IssuersModule } from "./issuers/issuers.module";
+import { OrganizationsModule } from "./organizations/organizations.module";
 import { PaymentsModule } from "./payments/payments.module";
 import { ProofsModule } from "./proofs/proofs.module";
 
@@ -18,6 +20,8 @@ import { ProofsModule } from "./proofs/proofs.module";
     DatabaseModule,
     AuthModule,
     HealthModule,
+    OrganizationsModule,
+    IssuersModule,
     PaymentsModule,
     ProofsModule,
   ],

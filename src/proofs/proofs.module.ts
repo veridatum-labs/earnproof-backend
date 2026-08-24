@@ -8,5 +8,6 @@ import { ProofsService } from "./proofs.service";
   imports: [AuthModule],
   controllers: [ProofsController],
   providers: [ContractAnchoringService, ProofsService],
+  exports: [ContractAnchoringService],
 })
 export class ProofsModule {}
