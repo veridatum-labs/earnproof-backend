@@ -16,6 +16,8 @@ export const configuration = () => ({
   sessionSecret: process.env.SESSION_SECRET,
   credentialSigningSecret: process.env.CREDENTIAL_SIGNING_SECRET,
   paymentEncryptionKey: process.env.PAYMENT_ENCRYPTION_KEY,
+  verificationEventRetentionDays:
+    Number(process.env.VERIFICATION_EVENT_RETENTION_DAYS ?? 90),
   contractAnchoring: {
     enabled: process.env.CONTRACT_ANCHORING_ENABLED === "true",
     required: process.env.CONTRACT_ANCHORING_REQUIRED === "true",

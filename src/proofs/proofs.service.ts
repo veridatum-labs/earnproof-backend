@@ -12,8 +12,10 @@ import {
   ProofStatus,
   ProofType,
   VerificationResult,
+  VerificationOutcome,
 } from "@prisma/client";
 import { createHmac, randomUUID } from "crypto";
+import { VerificationEventService } from "../audit/verification-event.service";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { sha256 } from "../common/crypto/hash";
 import { decryptProtectedAmount } from "../common/crypto/protected-amount";
@@ -58,6 +60,7 @@ export class ProofsService {
   constructor(
     private readonly prisma: PrismaService,
     configService: ConfigService,
+    private readonly verificationEventService: VerificationEventService,
     @Optional()
     private readonly contractAnchoringService?: ContractAnchoringService,
   ) {
@@ -303,6 +306,21 @@ export class ProofsService {
     });
 
     if (!proof || !proof.claim) {
+      // Fail-open policy: record event asynchronously
+      // If event recording fails, the verification response is still returned.
+      // This ensures verification availability over audit completeness.
+      this.verificationEventService.recordEvent(
+        VerificationOutcome.UNKNOWN,
+        proofId,
+        {
+          outcome: "UNKNOWN",
+          timestamp: new Date(),
+        },
+      ).catch(() => {
+        // Error already logged by the service
+        // Verification continues unblocked
+      });
+
       return {
         result: VerificationResult.UNKNOWN_PROOF,
         status: "unknown",
@@ -346,6 +364,21 @@ export class ProofsService {
         result = VerificationResult.INVALID_SIGNATURE;
       }
     }
+
+    // Convert VerificationResult to VerificationOutcome for event recording
+    const outcome = this.mapResultToOutcome(result);
+
+    // Fail-open policy: record verification event asynchronously
+    // If event recording fails, the verification response is still returned.
+    // This ensures verification availability over audit completeness.
+    // Event recording errors are caught and logged by the service.
+    this.verificationEventService.recordEvent(outcome, proof.id, {
+      outcome: outcome,
+      timestamp: new Date(),
+    }).catch(() => {
+      // Error already logged by the service
+      // Verification continues unblocked
+    });
 
     await this.prisma.verificationEvent.create({
       data: {
@@ -511,5 +544,49 @@ export class ProofsService {
       default:
         return "invalid";
     }
+  }
+
+  private mapResultToOutcome(result: VerificationResult): VerificationOutcome {
+    switch (result) {
+      case VerificationResult.VALID:
+        return VerificationOutcome.VALID;
+      case VerificationResult.EXPIRED:
+        return VerificationOutcome.EXPIRED;
+      case VerificationResult.REVOKED:
+        return VerificationOutcome.REVOKED;
+      case VerificationResult.INVALID_SIGNATURE:
+        return VerificationOutcome.INVALID_SIGNATURE;
+      case VerificationResult.UNKNOWN_PROOF:
+        return VerificationOutcome.UNKNOWN;
+      case VerificationResult.UNVERIFIED_ISSUER:
+        return VerificationOutcome.ISSUER_WARNING;
+      default:
+        return VerificationOutcome.UNKNOWN;
+    }
+  }
+
+  async getVerificationStats(userId: string, proofId: string) {
+    // Verify proof ownership: only the owner or admin can view stats
+    const proof = await this.prisma.proof.findUnique({
+      where: {
+        id: proofId,
+      },
+      select: {
+        id: true,
+        userId: true,
+      },
+    });
+
+    if (!proof) {
+      throw new NotFoundException("Proof not found");
+    }
+
+    if (proof.userId !== userId) {
+      throw new ForbiddenException(
+        "You do not have permission to view statistics for this proof",
+      );
+    }
+
+    return this.verificationEventService.getAggregateStats(proofId);
   }
 }
