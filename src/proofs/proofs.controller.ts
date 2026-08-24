@@ -4,6 +4,7 @@ import { AuthenticatedUser } from "../auth/auth.types";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { AuthGuard } from "../common/guards/auth.guard";
 import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.dto";
+import { CreateRecurringIncomeProofDto } from "./dto/create-recurring-income-proof.dto";
 import { ProofsService } from "./proofs.service";
 
 @ApiTags("proofs")
@@ -19,6 +20,16 @@ export class ProofsController {
     @Body() body: CreateMinimumIncomeProofDto,
   ) {
     return this.proofsService.createMinimumIncomeProof(user, body);
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard)
+  @Post("recurring-income")
+  createRecurringIncomeProof(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: CreateRecurringIncomeProofDto,
+  ) {
+    return this.proofsService.createRecurringIncomeProof(user, body);
   }
 
   @ApiBearerAuth()
