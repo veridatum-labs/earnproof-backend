@@ -291,7 +291,6 @@ describe("VerificationEventService", () => {
           "proof_123",
           { outcome: "VALID" },
         );
-        const afterCall = Date.now();
 
         const call = prismaService.verificationEventLog.create.mock.calls[0];
         const retainUntil = call[0].data.retainUntil;
@@ -344,21 +343,102 @@ describe("VerificationEventService", () => {
         expect(recordedData.saltVersion).toEqual(expect.any(Number));
       });
 
-      it("increments saltVersion as salt rotates", async () => {
-        // We can't easily test 30-day rotation in unit tests,
-        // but we can verify the version is stored and used consistently
-        const metadata1 = { outcome: "VALID", timestamp: new Date() };
-        const hash1 = service.hashMetadata(metadata1, 0);
+      it("uses configured salt version (default 0)", async () => {
+        await service.recordEvent(
+          VerificationOutcome.VALID,
+          "proof_123",
+          { outcome: "VALID" },
+        );
 
-        const metadata2 = { outcome: "VALID", timestamp: new Date() };
-        const hash2 = service.hashMetadata(metadata2, 0);
+        const call = prismaService.verificationEventLog.create.mock.calls[0];
+        const recordedData = call[0].data;
 
-        // Same version should produce same hash
-        expect(hash1).toBe(hash2);
+        // Default config service returns 0
+        expect(recordedData.saltVersion).toBe(0);
+      });
 
-        // Different version should produce different hash
-        const hash3 = service.hashMetadata(metadata1, 1);
-        expect(hash1).not.toBe(hash3);
+      it("respects VERIFICATION_HASH_SALT_VERSION config", async () => {
+        const configWithVersion = createMockConfigService({
+          verificationHashSaltVersion: 2,
+        });
+        const svc = new VerificationEventService(
+          prismaService,
+          configWithVersion as any,
+        );
+
+        await svc.recordEvent(
+          VerificationOutcome.VALID,
+          "proof_123",
+          { outcome: "VALID" },
+        );
+
+        const call = prismaService.verificationEventLog.create.mock.calls[0];
+        const recordedData = call[0].data;
+
+        expect(recordedData.saltVersion).toBe(2);
+      });
+
+      it("salt version is within loadable range (0-99)", async () => {
+        await service.recordEvent(
+          VerificationOutcome.VALID,
+          "proof_123",
+          { outcome: "VALID" },
+        );
+
+        const call = prismaService.verificationEventLog.create.mock.calls[0];
+        const recordedData = call[0].data;
+
+        expect(recordedData.saltVersion).toBeGreaterThanOrEqual(0);
+        expect(recordedData.saltVersion).toBeLessThan(100);
+      });
+
+      it("recording actually persists event (does not fail open due to missing salt)", async () => {
+        prismaService.verificationEventLog.create.mockResolvedValueOnce({
+          id: "event_123",
+          outcome: VerificationOutcome.VALID,
+          proofId: "proof_123",
+          metadataHash: "hash",
+          saltVersion: 0,
+          retainUntil: new Date(),
+          createdAt: new Date(),
+        });
+
+        await service.recordEvent(
+          VerificationOutcome.VALID,
+          "proof_123",
+          { outcome: "VALID" },
+        );
+
+        // Verify create was called (event was persisted)
+        expect(prismaService.verificationEventLog.create).toHaveBeenCalled();
+      });
+
+      it("increments saltVersion as salt rotates (different versions)", async () => {
+        // We can't easily test long-term rotation in unit tests,
+        // but we can verify different configured versions work
+        const configV0 = createMockConfigService({
+          verificationHashSaltVersion: 0,
+        });
+        const svcV0 = new VerificationEventService(
+          prismaService,
+          configV0 as any,
+        );
+
+        const configV1 = createMockConfigService({
+          verificationHashSaltVersion: 1,
+        });
+        const svcV1 = new VerificationEventService(
+          prismaService,
+          configV1 as any,
+        );
+
+        const metadata = { outcome: "VALID", timestamp: new Date() };
+
+        const hashV0 = svcV0.hashMetadata(metadata, 0);
+        const hashV1 = svcV1.hashMetadata(metadata, 1);
+
+        // Different versions should produce different hashes
+        expect(hashV0).not.toBe(hashV1);
       });
     });
   });

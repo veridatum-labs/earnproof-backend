@@ -41,7 +41,14 @@ export class VerificationEventService {
   ) {
     this.retentionDays =
       configService.get<number>("verificationEventRetentionDays") || 90;
-    this.currentSaltVersion = this.calculateCurrentSaltVersion();
+
+    // Use explicitly configured salt version
+    // Operators control rotation by incrementing VERIFICATION_HASH_SALT_VERSION env var
+    const configuredVersion = configService.get<number>(
+      "verificationHashSaltVersion",
+    );
+    this.currentSaltVersion =
+      configuredVersion !== undefined ? configuredVersion : 0;
 
     // Load all available salts from environment
     // VERIFICATION_HASH_SALT_V0, VERIFICATION_HASH_SALT_V1, etc.
@@ -68,6 +75,14 @@ export class VerificationEventService {
           "Using credentialSigningSecret as fallback salt V0. Configure VERIFICATION_HASH_SALT_V* for production.",
         );
       }
+    }
+
+    if (!this.salts.has(this.currentSaltVersion)) {
+      this.logger.warn(
+        `Configured salt version ${this.currentSaltVersion} is not available. ` +
+          `Available versions: 0-${this.salts.size - 1}. ` +
+          `Adjust VERIFICATION_HASH_SALT_VERSION or configure VERIFICATION_HASH_SALT_V${this.currentSaltVersion}.`,
+      );
     }
   }
 
@@ -133,9 +148,9 @@ export class VerificationEventService {
    * - Credentials or sensitive data
    *
    * Salt rotation strategy:
-   * - Each salt version is used for 30 days
-   * - Version = floor(daysSinceEpoch / 30)
-   * - Rotating daily would be overkill; 30-day windows balance utility + privacy
+   * - Salt version is explicitly configured via VERIFICATION_HASH_SALT_VERSION env var
+   * - Operators control rotation by incrementing the version and configuring new salt
+   * - Salts must be pre-configured as VERIFICATION_HASH_SALT_V0, VERIFICATION_HASH_SALT_V1, etc.
    * - Different versions produce different hashes for same metadata
    * - This reduces long-term linkability across rotations
    *
@@ -257,31 +272,4 @@ export class VerificationEventService {
     }
   }
 
-  /**
-   * Calculate the current salt version based on time elapsed.
-   *
-   * Salt version rotates every 30 days:
-   * version = floor(daysSinceEpoch / 30)
-   *
-   * This allows:
-   * - Versioning salts in config: VERIFICATION_HASH_SALT_V0, V1, V2, ...
-   * - Periodic salt rotation without key management complexity
-   * - Documented, deterministic salt schedule
-   * - Privacy benefit: different version = different hash for same metadata
-   *
-   * Example:
-   * - Jan 1, 1970 → V0
-   * - Jan 31, 1970 → V1
-   * - Feb 29, 1970 → V1
-   * - Mar 1, 1970 → V2
-   *
-   * @private
-   * @returns Current salt version number
-   */
-  private calculateCurrentSaltVersion(): number {
-    const EPOCH = new Date("1970-01-01").getTime();
-    const now = Date.now();
-    const daysSinceEpoch = Math.floor((now - EPOCH) / (24 * 60 * 60 * 1000));
-    return Math.floor(daysSinceEpoch / 30);
-  }
 }
