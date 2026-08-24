@@ -280,7 +280,7 @@ model ApiKey {
   name           String
   prefix         String          @db.VarChar(8)
   keyHash        String          @unique
-  scopeAssignments ApiKeyScopeAssignment[]
+  scopeAssignments ApiKeyScopeAssignment[] @relation("apiKeyScopeAssignments")
   status         ResourceStatus  @default(ACTIVE)
   lastUsedAt     DateTime?
   rotatedAt      DateTime?
@@ -295,7 +295,7 @@ model ApiKey {
 model ApiKeyScopeAssignment {
   id       String      @id @default(cuid())
   apiKeyId String
-  apiKey   ApiKey      @relation("scopeAssignments", fields: [apiKeyId], references: [id], onDelete: Cascade)
+  apiKey   ApiKey      @relation("apiKeyScopeAssignments", fields: [apiKeyId], references: [id], onDelete: Cascade)
   scope    ApiKeyScope
 
   @@unique([apiKeyId, scope])

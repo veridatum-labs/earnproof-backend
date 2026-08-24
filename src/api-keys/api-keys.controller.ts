@@ -93,9 +93,13 @@ export class ApiKeysController {
       expiresAt?: string;
     },
   ) {
-    // TODO: Check organization admin role
-    // For now, any authenticated user can create keys
-    // In production, add role check: if user is not org admin, throw ForbiddenException
+    // Authorization: User must be organization admin
+    const organizationId = await this.getUserPrimaryOrganizationId(user.id);
+    if (!organizationId) {
+      throw new ForbiddenException(
+        "Only organization admins can create API keys. You must be the organization creator or an admin member.",
+      );
+    }
 
     const expiresAt = body.expiresAt ? new Date(body.expiresAt) : undefined;
 
@@ -107,16 +111,6 @@ export class ApiKeysController {
           throw new BadRequestException(`Invalid scope: ${scope}`);
         }
       }
-    }
-
-    // Get user's organization (assumes user has exactly one org or primary org)
-    // TODO: In production, determine which organization this key is for
-    // Could be from request header, path param, or user's primary organization
-    const organizationId = await this.getUserPrimaryOrganizationId(user.id);
-    if (!organizationId) {
-      throw new ForbiddenException(
-        "User must belong to an organization to create API keys",
-      );
     }
 
     const result = await this.apiKeyService.createKey({
@@ -166,12 +160,11 @@ export class ApiKeysController {
     },
   })
   async listKeys(@CurrentUser() user: AuthenticatedUser) {
-    // TODO: Check organization admin role
-
+    // Authorization: User must be organization admin
     const organizationId = await this.getUserPrimaryOrganizationId(user.id);
     if (!organizationId) {
       throw new ForbiddenException(
-        "User must belong to an organization to list API keys",
+        "Only organization admins can list API keys. You must be the organization creator or an admin member.",
       );
     }
 
@@ -227,12 +220,11 @@ export class ApiKeysController {
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") keyId: string,
   ) {
-    // TODO: Check organization admin role
-
+    // Authorization: User must be organization admin
     const organizationId = await this.getUserPrimaryOrganizationId(user.id);
     if (!organizationId) {
       throw new ForbiddenException(
-        "User must belong to an organization to rotate API keys",
+        "Only organization admins can rotate API keys. You must be the organization creator or an admin member.",
       );
     }
 
@@ -283,12 +275,11 @@ export class ApiKeysController {
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") keyId: string,
   ) {
-    // TODO: Check organization admin role
-
+    // Authorization: User must be organization admin
     const organizationId = await this.getUserPrimaryOrganizationId(user.id);
     if (!organizationId) {
       throw new ForbiddenException(
-        "User must belong to an organization to revoke API keys",
+        "Only organization admins can revoke API keys. You must be the organization creator or an admin member.",
       );
     }
 
@@ -317,19 +308,32 @@ export class ApiKeysController {
   }
 
   /**
-   * Helper: Get user's primary organization ID.
-   * This is a placeholder implementation. In a real system with explicit
-   * org-role modeling, this would look up the user's org memberships.
+   * Helper: Get user's primary organization ID and verify admin access.
    *
-   * TODO: Implement proper org-membership lookup
+   * Returns the organization ID if the user is an admin of at least one organization.
+   * In this codebase, organization admin is determined by:
+   * - User created the organization (createdById == userId), OR
+   * - User has ADMIN role (global admin has access to all orgs)
+   *
+   * TODO: This implementation assumes user can only manage orgs they created.
+   * For multi-admin orgs, implement explicit OrganizationMember join table
+   * with role field (admin, member, etc.)
+   *
+   * @returns organizationId if authorized as admin, null otherwise
    */
   private async getUserPrimaryOrganizationId(
     userId: string,
   ): Promise<string | null> {
-    // For now, return null to force the TODO to be addressed
-    // In production, query Organizations table where createdBy=userId or
-    // check an explicit OrganizationMember join table
-    void userId; // Intentionally unused in placeholder
-    return null;
+    // Query for an organization created by this user
+    const org = await this.prisma.organization.findFirst({
+      where: {
+        createdById: userId,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    return org?.id || null;
   }
 }

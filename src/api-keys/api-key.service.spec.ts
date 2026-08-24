@@ -625,7 +625,7 @@ describe("ApiKeyService", () => {
     it("never logs raw secrets in any audit operation", async () => {
       let capturedSecret: string | null = null;
 
-      prismaService.apiKey.create.mockImplementationOnce(async (input) => {
+      prismaService.apiKey.create.mockImplementationOnce(async (input: any) => {
         // Capture what would be stored as the hash
         capturedSecret = input.data.keyHash;
         return {

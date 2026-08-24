@@ -222,7 +222,7 @@ export class ApiKeyService {
    * @param organizationId - Organization scope
    * @returns New secret and updated key metadata
    */
-  async rotateKey(keyId: string, organizationId: string) {
+  async rotateKey(keyId: string, organizationId: string, actorId?: string) {
     const { secret, prefix } = this.generateSecret();
     const keyHash = this.hashSecret(secret);
 
@@ -251,7 +251,7 @@ export class ApiKeyService {
     await this.prisma.auditLog.create({
       data: {
         actorType: "user",
-        actorId: "", // TODO: pass actor ID to this method
+        actorId: actorId || "",
         action: "api_key.rotated",
         resourceType: "api_key",
         resourceId: apiKey.id,
@@ -340,27 +340,24 @@ export class ApiKeyService {
       where: {
         organizationId,
       },
-      include: {
-        scopeAssignments: {
-          select: {
-            scope: true,
-          },
-        },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
       select: {
         id: true,
         prefix: true,
         name: true,
         status: true,
-        scopeAssignments: true,
+        scopeAssignments: {
+          select: {
+            scope: true,
+          },
+        },
         createdAt: true,
         rotatedAt: true,
         revokedAt: true,
         expiresAt: true,
         lastUsedAt: true,
+      },
+      orderBy: {
+        createdAt: "desc",
       },
     });
   }
