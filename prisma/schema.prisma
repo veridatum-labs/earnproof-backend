@@ -63,6 +63,18 @@ enum VerificationResult {
   UNVERIFIED_ISSUER
 }
 
+enum AnchoringOperation {
+  REGISTER
+  REVOKE
+}
+
+enum AnchoringStatus {
+  PENDING
+  PROCESSING
+  CONFIRMED
+  FAILED
+}
+
 model User {
   id                 String          @id @default(cuid())
   walletAddress      String          @unique
@@ -207,6 +219,7 @@ model Proof {
   updatedAt               DateTime            @updatedAt
   claim                   ProofClaim?
   verificationEvents      VerificationEvent[]
+  anchoringIntents        AnchoringIntent[]
 
   @@index([userId, status])
   @@index([proofType])
@@ -301,4 +314,24 @@ model AuditLog {
   @@index([actorType, actorId])
   @@index([resourceType, resourceId])
   @@index([createdAt])
+}
+
+model AnchoringIntent {
+  id              String             @id @default(cuid())
+  proofId         String
+  proof           Proof              @relation(fields: [proofId], references: [id])
+  operation       AnchoringOperation
+  status          AnchoringStatus    @default(PENDING)
+  attemptCount    Int                @default(0)
+  lastAttemptAt   DateTime?
+  nextRetryAt     DateTime?
+  transactionHash String?
+  ledger          String?
+  lastErrorSafe   String?
+  permanentError  Boolean            @default(false)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([status, nextRetryAt])
+  @@index([proofId, operation])
 }
