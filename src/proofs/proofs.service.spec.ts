@@ -448,13 +448,18 @@ describe("ProofsService – recurring-income", () => {
     });
 
     expect(result.status).toBe(ProofStatus.ACTIVE);
-    expect(result.credential.type).toBe("EarnProofRecurringIncomeCredential");
-    expect(result.credential.schemaVersion).toBe("earnproof.recurring-income.v1");
-    expect(result.credential.claim.intervalUnit).toBe("month");
-    expect(result.credential.claim.intervalCount).toBe(3);
-    expect(result.credential.claim.cadence).toBe("month:3");
-    expect(result.credential.claim.qualifyingPaymentCount).toBe(3);
-    expect(result.credential.proof.signature).toMatch(/^hmac-sha256:/);
+    expect(result.credential!.type).toBe("EarnProofRecurringIncomeCredential");
+    expect(result.credential!.schemaVersion).toBe("earnproof.recurring-income.v1");
+    const claimAsRecurring = result.credential!.claim as {
+      cadence: string;
+      intervalUnit: string;
+      intervalCount: number;
+    };
+    expect(claimAsRecurring.intervalUnit).toBe("month");
+    expect(claimAsRecurring.intervalCount).toBe(3);
+    expect(claimAsRecurring.cadence).toBe("month:3");
+    expect(result.credential!.claim.qualifyingPaymentCount).toBe(3);
+    expect(result.credential!.proof.signature).toMatch(/^hmac-sha256:/);
     expect(prisma.proof.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -740,9 +745,14 @@ describe("ProofsService – recurring-income", () => {
 
     expect(result.result).toBe(VerificationResult.VALID);
     expect(result.status).toBe("valid");
-    expect(result.credential.type).toBe("EarnProofRecurringIncomeCredential");
-    expect(result.credential.claim.cadence).toBe("month:3");
-    expect(result.credential.claim.intervalCount).toBe(3);
+    expect(result.credential!.type).toBe("EarnProofRecurringIncomeCredential");
+    const claimAsRecurring2 = result.credential!.claim as {
+      cadence: string;
+      intervalUnit: string;
+      intervalCount: number;
+    };
+    expect(claimAsRecurring2.cadence).toBe("month:3");
+    expect(claimAsRecurring2.intervalCount).toBe(3);
     expect(result.proof?.schemaVersion).toBe("earnproof.recurring-income.v1");
     expect(result.proof?.type).toBe(ProofType.RECURRING_INCOME);
   });

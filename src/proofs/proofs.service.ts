@@ -519,8 +519,24 @@ export class ProofsService {
       };
     }
 
-    const { credential: builtCredential, signedCredential } =
-      this.rebuildAndSign(proof);
+    const { credential: builtCredential, signedCredential } = this.rebuildAndSign(
+      proof as {
+        id: string;
+        proofType: ProofType;
+        assetCode: string;
+        assetIssuer: string | null;
+        periodStart: Date | null;
+        periodEnd: Date | null;
+        createdAt: Date;
+        expiresAt: Date;
+        user: { walletHash: string };
+        claim: {
+          thresholdEncrypted: string | null;
+          frequency: string | null;
+          disclosurePolicy: Prisma.JsonValue;
+        };
+      },
+    );
     const expectedHash = `sha256:${sha256(this.canonicalize(builtCredential))}`;
 
     let result: VerificationResult = VerificationResult.VALID;

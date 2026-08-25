@@ -197,8 +197,13 @@ describe("ProofsService lifecycle – recurring-income", () => {
     const firstVerification = await service.verifyProof(created.proofId);
     expect(firstVerification.result).toBe(VerificationResult.VALID);
     expect(firstVerification.status).toBe("valid");
-    expect(firstVerification.credential.type).toBe("EarnProofRecurringIncomeCredential");
-    expect(firstVerification.credential.claim.cadence).toBe("month:3");
+    expect(firstVerification.credential!.type).toBe("EarnProofRecurringIncomeCredential");
+    const claimAsRecurring = firstVerification.credential!.claim as {
+      cadence: string;
+      intervalUnit: string;
+      intervalCount: number;
+    };
+    expect(claimAsRecurring.cadence).toBe("month:3");
     expect(store.verificationEvents).toHaveLength(1);
 
     // ── 3. Revoke ────────────────────────────────────────────────────────────
