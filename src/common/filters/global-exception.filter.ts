@@ -8,7 +8,11 @@ import {
 } from "@nestjs/common";
 import { Request, Response } from "express";
 import { Prisma } from "@prisma/client";
-import { ApiErrorCode, ApiErrorDto, FieldViolationDto } from "../dto/api-error.dto";
+import {
+  ApiErrorCode,
+  ApiErrorDto,
+  FieldViolationDto,
+} from "../dto/api-error.dto";
 import { REQUEST_ID_HEADER } from "../interceptors/request-id.interceptor";
 import { randomBytes } from "crypto";
 
@@ -21,7 +25,14 @@ import { randomBytes } from "crypto";
 const PRISMA_NOT_FOUND_CODES = new Set(["P2025"]);
 const PRISMA_CONFLICT_CODES = new Set(["P2002", "P2003"]);
 const PRISMA_DEPENDENCY_CODES = new Set([
-  "P1000", "P1001", "P1002", "P1003", "P1008", "P1010", "P1011", "P1017",
+  "P1000",
+  "P1001",
+  "P1002",
+  "P1003",
+  "P1008",
+  "P1010",
+  "P1011",
+  "P1017",
 ]);
 
 // ─── NestJS built-in exception message shapes ────────────────────────────────
@@ -102,7 +113,8 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       return {
         statusCode: HttpStatus.SERVICE_UNAVAILABLE,
         code: ApiErrorCode.DEPENDENCY_UNAVAILABLE,
-        message: "A required service dependency is temporarily unavailable. Please try again later.",
+        message:
+          "A required service dependency is temporarily unavailable. Please try again later.",
       };
     }
 
@@ -110,7 +122,8 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       return {
         statusCode: HttpStatus.SERVICE_UNAVAILABLE,
         code: ApiErrorCode.DEPENDENCY_UNAVAILABLE,
-        message: "A required service dependency is temporarily unavailable. Please try again later.",
+        message:
+          "A required service dependency is temporarily unavailable. Please try again later.",
       };
     }
 
@@ -139,6 +152,14 @@ export class GlobalExceptionFilter implements ExceptionFilter {
   } {
     const status = exception.getStatus();
     const raw = exception.getResponse();
+
+    if (this.isStableErrorResponse(raw)) {
+      return {
+        statusCode: status,
+        code: raw.code,
+        message: raw.message,
+      };
+    }
 
     // NestJS ValidationPipe throws 400 with { message: string[], error, statusCode }
     if (status === HttpStatus.BAD_REQUEST && this.isValidationResponse(raw)) {
@@ -179,7 +200,8 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       return {
         statusCode: HttpStatus.CONFLICT,
         code: ApiErrorCode.CONFLICT,
-        message: "The request conflicts with the current state of the resource.",
+        message:
+          "The request conflicts with the current state of the resource.",
       };
     }
 
@@ -223,6 +245,18 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       code: ApiErrorCode.INTERNAL_ERROR,
       message: "An unexpected error occurred. Please try again later.",
     };
+  }
+
+  private isStableErrorResponse(
+    value: unknown,
+  ): value is { code: ApiErrorCode; message: string } {
+    if (!value || typeof value !== "object") return false;
+    const response = value as Record<string, unknown>;
+    return (
+      typeof response.message === "string" &&
+      typeof response.code === "string" &&
+      Object.values(ApiErrorCode).includes(response.code as ApiErrorCode)
+    );
   }
 
   private classifyUnauthorized(exception: HttpException): {
@@ -269,7 +303,8 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       return {
         statusCode: HttpStatus.UNAUTHORIZED,
         code: ApiErrorCode.INVALID_CREDENTIALS,
-        message: "The authentication challenge is expired or has already been used.",
+        message:
+          "The authentication challenge is expired or has already been used.",
       };
     }
 
@@ -317,7 +352,8 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       return {
         statusCode: HttpStatus.CONFLICT,
         code: ApiErrorCode.CONFLICT,
-        message: "The request conflicts with the current state of the resource.",
+        message:
+          "The request conflicts with the current state of the resource.",
       };
     }
 
@@ -325,7 +361,8 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       return {
         statusCode: HttpStatus.SERVICE_UNAVAILABLE,
         code: ApiErrorCode.DEPENDENCY_UNAVAILABLE,
-        message: "A required service dependency is temporarily unavailable. Please try again later.",
+        message:
+          "A required service dependency is temporarily unavailable. Please try again later.",
       };
     }
 
