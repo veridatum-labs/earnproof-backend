@@ -59,19 +59,25 @@ function makeConfig(anchoringEnabled = false, anchoringRequired = false) {
   };
 }
 
-  const mockVerificationEventService = {
-    recordEvent: jest.fn().mockResolvedValue(undefined),
-    getAggregateStats: jest.fn().mockResolvedValue({}),
-    cleanupExpiredEvents: jest.fn().mockResolvedValue(0),
-  } as unknown as VerificationEventService;
+const mockVerificationEventService = {
+  recordEvent: jest.fn().mockResolvedValue(undefined),
+  getAggregateStats: jest.fn().mockResolvedValue({}),
+  cleanupExpiredEvents: jest.fn().mockResolvedValue(0),
+} as unknown as VerificationEventService;
 
-  const user = {
-    id: "user_1",
-    walletAddress: "GB_TEST",
-    walletHash: "sha256:wallet",
-    role: "WORKER",
-  };
+const user = {
+  id: "user_1",
+  walletAddress: "GB_TEST",
+  walletHash: "sha256:wallet",
+  role: "WORKER",
+};
 
+const config = makeConfig();
+
+/**
+ * Build a minimal Prisma mock for proof creation.
+ * Captures writes so tests can inspect them.
+ */
 const singlePayment = [
   {
     id: "payment_1",
@@ -84,61 +90,45 @@ const singlePayment = [
   },
 ];
 
-/**
- * Build a minimal Prisma mock for proof creation.
- * Captures writes so tests can inspect them.
- */
 function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
-  const txFn = jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) => {
-    const captured: { anchoringCreate?: unknown } = {};
-    const tx = {
-      proof: {
-        create: jest.fn().mockImplementation(({ data }) => ({
-          id: data.id,
-          userId: data.userId,
-          proofType: data.proofType,
-          schemaVersion: data.schemaVersion,
-          status: data.status,
-          network: data.network,
-          assetCode: data.assetCode,
-          assetIssuer: data.assetIssuer,
-          periodStart: data.periodStart,
-          periodEnd: data.periodEnd,
-          expiresAt: data.expiresAt,
-          credentialHash: data.credentialHash,
-          commitment: data.commitment,
-          createdAt: data.createdAt,
-          claim: data.claim.create,
-        })),
-      },
-      anchoringIntent: {
-        create: jest.fn().mockImplementation(({ data }) => {
-          captured.anchoringCreate = data;
-          captureIntent?.(data);
-          return { id: "intent_1", ...data };
-        }),
-      },
-    };
-    const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
+  return {
+    payment: {
+      findMany: jest.fn().mockResolvedValue(singlePayment),
+    },
+    $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) => {
+      const tx = {
+        proof: {
+          create: jest.fn().mockImplementation(({ data }) => ({
+            id: data.id,
+            userId: data.userId,
+            proofType: data.proofType,
+            schemaVersion: data.schemaVersion,
+            status: data.status,
+            network: data.network,
+            assetCode: data.assetCode,
+            assetIssuer: data.assetIssuer,
+            periodStart: data.periodStart,
+            periodEnd: data.periodEnd,
+            expiresAt: data.expiresAt,
+            credentialHash: data.credentialHash,
+            commitment: data.commitment,
+            createdAt: data.createdAt,
+            claim: data.claim.create,
+          })),
+        },
+        anchoringIntent: {
+          create: jest.fn().mockImplementation(({ data }) => {
+            captureIntent?.(data);
+            return { id: "intent_1", ...data };
+          }),
+        },
+      };
+      return fn(tx);
+    }),
+  };
+}
 
-    const result = await service.createMinimumIncomeProof(user, {
-      selectedPaymentIds: ["payment_1"],
-      thresholdAmount: "100",
-      assetCode: "XLM",
-      periodStart: "2026-08-01T00:00:00.000Z",
-      periodEnd: "2026-08-31T23:59:59.000Z",
-      expiresInDays: 10,
-    });
-
-    expect(result.status).toBe(ProofStatus.ACTIVE);
-    expect(result.credential.claim.thresholdAmount).toBe("100");
-    expect(result.credential.claim.qualifyingPaymentCount).toBe(1);
-    expect(JSON.stringify(result)).not.toContain("125.50");
-    expect(JSON.stringify(result)).not.toContain("payment_1");
-    expect(result.credential.proof.signature).toMatch(/^hmac-sha256:/);
-    expect(prisma.$transaction).toHaveBeenCalled();
-  });
-
+describe("ProofsService", () => {
   it("rejects selected payments below the requested threshold", async () => {
     const prisma = {
       payment: {
@@ -277,9 +267,8 @@ function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
     };
     const service = new ProofsService(
       prisma as never,
-      config as never,
+      makeConfig(true) as never, // anchoring enabled
       mockVerificationEventService,
-      anchoring as never,
     );
 
     const result = await service.revokeProof("user_1", "proof_anchored");
@@ -379,6 +368,7 @@ function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
       const service = new ProofsService(
         prisma as never,
         makeConfig(true) as never, // anchoring enabled
+        mockVerificationEventService,
       );
 
       await service.createMinimumIncomeProof(user, {
@@ -402,6 +392,7 @@ function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
       const service = new ProofsService(
         prisma as never,
         makeConfig(false) as never, // anchoring disabled
+        mockVerificationEventService,
       );
 
       await service.createMinimumIncomeProof(user, {
@@ -420,6 +411,7 @@ function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
       const service = new ProofsService(
         prisma as never,
         makeConfig(true) as never,
+        mockVerificationEventService,
       );
 
       const result = await service.createMinimumIncomeProof(user, {
@@ -438,6 +430,7 @@ function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
       const service = new ProofsService(
         prisma as never,
         makeConfig(false) as never,
+        mockVerificationEventService,
       );
 
       const result = await service.createMinimumIncomeProof(user, {
@@ -510,6 +503,7 @@ function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
       const service = new ProofsService(
         prisma as never,
         makeConfig(true, true) as never, // enabled + required
+        mockVerificationEventService,
       );
 
       const result = await service.verifyProof("proof_req");
@@ -522,6 +516,7 @@ function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
       const service = new ProofsService(
         prisma as never,
         makeConfig(true, true) as never,
+        mockVerificationEventService,
       );
 
       const result = await service.verifyProof("proof_req");
@@ -535,6 +530,7 @@ function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
       const service = new ProofsService(
         prisma as never,
         makeConfig(true, false) as never,
+        mockVerificationEventService,
       );
 
       const result = await service.verifyProof("proof_req");
@@ -547,6 +543,7 @@ function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
       const service = new ProofsService(
         prisma as never,
         makeConfig(false, false) as never,
+        mockVerificationEventService,
       );
 
       const result = await service.verifyProof("proof_req");
@@ -555,3 +552,4 @@ function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
     });
   });
 });
+
