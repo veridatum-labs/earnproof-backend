@@ -146,42 +146,52 @@ export class SessionService {
     user: AuthenticatedUser,
     ttlSeconds = this.sessionTtlSeconds,
   ): Promise<{ token: string; sessionId: string; expiresAt: Date }> {
-    const existing = await this.prisma.authSession.findUnique({
-      where: { id: sessionId },
-      select: { revokedAt: true, expiresAt: true },
-    });
-
-    if (!existing) {
-      throw new UnauthorizedException("Session not found");
-    }
-
-    if (existing.revokedAt !== null) {
-      throw new UnauthorizedException(
-        "Cannot rotate an already-revoked session",
-      );
-    }
-
     const { token, tokenHash, sessionId: newSessionId } = this.generateToken();
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
 
-    // Atomic: create the successor and revoke the predecessor in one transaction.
-    await this.prisma.$transaction([
-      this.prisma.authSession.create({
+    await this.prisma.$transaction(async (transaction) => {
+      const existing = await transaction.authSession.findUnique({
+        where: { id: sessionId },
+        select: { userId: true, revokedAt: true, expiresAt: true },
+      });
+
+      if (!existing || existing.userId !== user.id) {
+        throw new UnauthorizedException("Session not found");
+      }
+
+      if (existing.revokedAt !== null) {
+        throw new UnauthorizedException(
+          "Cannot rotate an already-revoked session",
+        );
+      }
+
+      if (existing.expiresAt <= new Date()) {
+        throw new UnauthorizedException("Session has expired");
+      }
+
+      await transaction.authSession.create({
         data: {
           id: newSessionId,
           tokenHash,
           userId: user.id,
           expiresAt,
         },
-      }),
-      this.prisma.authSession.update({
-        where: { id: sessionId },
+      });
+
+      const revoked = await transaction.authSession.updateMany({
+        where: { id: sessionId, userId: user.id, revokedAt: null },
         data: {
           revokedAt: new Date(),
           rotatedToId: newSessionId,
         },
-      }),
-    ]);
+      });
+
+      if (revoked.count !== 1) {
+        throw new UnauthorizedException(
+          "Cannot rotate an already-revoked session",
+        );
+      }
+    });
 
     return { token, sessionId: newSessionId, expiresAt };
   }
@@ -243,7 +253,7 @@ export class SessionService {
    * Returns `null` for obviously malformed inputs (missing `.` separator).
    */
   private hashToken(token: string): string | null {
-    if (!token || !token.includes(".")) {
+    if (!/^[A-Za-z0-9_-]{16}\.[a-f0-9]{64}$/.test(token)) {
       return null;
     }
     return sha256(token);

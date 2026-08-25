@@ -22,6 +22,8 @@ const config = {
   getOrThrow: () => "test_secret_xyz",
 } as unknown as ConfigService;
 
+const validToken = `${"A".repeat(16)}.${"a".repeat(64)}`;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -155,7 +157,7 @@ describe("SessionService.validate", () => {
     prisma.authSession.findUnique.mockResolvedValue(null);
     const svc = new SessionService(prisma as never, config);
 
-    await expect(svc.validate("sid.a".padEnd(67, "b"))).rejects.toThrow(
+    await expect(svc.validate(validToken)).rejects.toThrow(
       "Session not found",
     );
   });
@@ -167,7 +169,7 @@ describe("SessionService.validate", () => {
     );
     const svc = new SessionService(prisma as never, config);
 
-    await expect(svc.validate("sid.abc123def456".padEnd(67, "0"))).rejects.toThrow(
+    await expect(svc.validate(validToken)).rejects.toThrow(
       "Session has been revoked",
     );
   });
@@ -179,7 +181,7 @@ describe("SessionService.validate", () => {
     );
     const svc = new SessionService(prisma as never, config);
 
-    await expect(svc.validate("sid.abc123def456".padEnd(67, "0"))).rejects.toThrow(
+    await expect(svc.validate(validToken)).rejects.toThrow(
       "Session has expired",
     );
   });
@@ -251,16 +253,21 @@ describe("SessionService.revoke", () => {
 // ---------------------------------------------------------------------------
 
 describe("SessionService.rotate", () => {
+  function runTransactions(prisma: ReturnType<typeof makePrismaMock>) {
+    prisma.$transaction.mockImplementation(
+      async (callback: (transaction: typeof prisma) => Promise<unknown>) =>
+        callback(prisma),
+    );
+  }
+
   it("creates a new session and revokes the old one atomically", async () => {
     const prisma = makePrismaMock();
     prisma.authSession.findUnique.mockResolvedValue(
       activeSession({ id: "old_sess" }),
     );
-    prisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => {
-      await Promise.all(ops);
-    });
+    runTransactions(prisma);
     prisma.authSession.create.mockResolvedValue({});
-    prisma.authSession.update.mockResolvedValue({});
+    prisma.authSession.updateMany.mockResolvedValue({ count: 1 });
     const svc = new SessionService(prisma as never, config);
 
     const result = await svc.rotate("old_sess", {
@@ -274,21 +281,11 @@ describe("SessionService.rotate", () => {
     expect(result.sessionId).not.toBe("old_sess");
     expect(result.expiresAt.getTime()).toBeGreaterThan(Date.now());
 
-    // The transaction must have been called.
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-
-    // The old session must have been revoked inside the transaction.
-    const [[createOp, updateOp]] = prisma.$transaction.mock.calls as [
-      [Promise<unknown>, Promise<unknown>][],
-    ];
-    // We can't easily inspect the promise args directly, but confirm that
-    // both create and update were invoked (one for new, one to revoke old).
-    void createOp;
-    void updateOp;
     expect(prisma.authSession.create).toHaveBeenCalledTimes(1);
-    expect(prisma.authSession.update).toHaveBeenCalledWith(
+    expect(prisma.authSession.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: "old_sess" },
+        where: { id: "old_sess", userId: "user_1", revokedAt: null },
         data: expect.objectContaining({ revokedAt: expect.any(Date) }),
       }),
     );
@@ -299,6 +296,7 @@ describe("SessionService.rotate", () => {
     prisma.authSession.findUnique.mockResolvedValue(
       activeSession({ id: "old_sess", revokedAt: new Date() }),
     );
+    runTransactions(prisma);
     const svc = new SessionService(prisma as never, config);
 
     await expect(
@@ -314,6 +312,7 @@ describe("SessionService.rotate", () => {
   it("rejects rotation of a missing session", async () => {
     const prisma = makePrismaMock();
     prisma.authSession.findUnique.mockResolvedValue(null);
+    runTransactions(prisma);
     const svc = new SessionService(prisma as never, config);
 
     await expect(
@@ -332,10 +331,8 @@ describe("SessionService.rotate", () => {
     prisma.authSession.findUnique.mockResolvedValue(
       activeSession({ id: "old_sess" }),
     );
-    prisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => {
-      await Promise.all(ops);
-    });
-    prisma.authSession.update.mockResolvedValue({});
+    runTransactions(prisma);
+    prisma.authSession.updateMany.mockResolvedValue({ count: 1 });
     const svc = new SessionService(prisma as never, config);
 
     const originalToken = "old_sess.aaaa".padEnd(67, "0");
@@ -347,6 +344,37 @@ describe("SessionService.rotate", () => {
     });
 
     expect(rotated.token).not.toBe(originalToken);
+  });
+
+  it("allows only one concurrent rotation of the same session", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.findUnique.mockResolvedValue(
+      activeSession({ id: "old_sess" }),
+    );
+    prisma.authSession.create.mockResolvedValue({});
+    prisma.authSession.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+    runTransactions(prisma);
+    const svc = new SessionService(prisma as never, config);
+    const user = {
+      id: "user_1",
+      walletAddress: "G".padEnd(56, "A"),
+      walletHash: "sha256:abc",
+      role: "WORKER",
+    };
+
+    const results = await Promise.allSettled([
+      svc.rotate("old_sess", user),
+      svc.rotate("old_sess", user),
+    ]);
+
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(
+      1,
+    );
+    expect(results.filter(({ status }) => status === "rejected")).toHaveLength(
+      1,
+    );
   });
 });
 
@@ -395,9 +423,9 @@ describe("SessionService.deleteExpired", () => {
 
     await svc.deleteExpired();
 
-    const [[call]] = prisma.authSession.deleteMany.mock.calls as [
-      [{ where: { expiresAt: { lt: Date } } }][],
-    ];
+    const call = prisma.authSession.deleteMany.mock.calls[0][0] as {
+      where: { expiresAt: { lt: Date } };
+    };
     const cutoff = call.where.expiresAt.lt;
     expect(cutoff.getTime()).toBeGreaterThanOrEqual(before.getTime() - 10);
     expect(cutoff.getTime()).toBeLessThanOrEqual(Date.now() + 10);

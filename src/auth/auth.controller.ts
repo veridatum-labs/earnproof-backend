@@ -14,11 +14,15 @@ import { AuthenticatedSession } from "./auth.types";
 import { AuthService } from "./auth.service";
 import { CreateChallengeDto } from "./dto/create-challenge.dto";
 import { VerifyChallengeDto } from "./dto/verify-challenge.dto";
+import { SessionService } from "./session.service";
 
 @ApiTags("auth")
 @Controller("auth")
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly sessionService: SessionService,
+  ) {}
 
   @Post("challenge")
   createChallenge(@Body() body: CreateChallengeDto) {
@@ -44,5 +48,18 @@ export class AuthController {
   async logout(@CurrentUser() session: AuthenticatedSession) {
     await this.authService.logout(session.sessionId);
     return { status: "ok" };
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard)
+  @Post("rotate")
+  @HttpCode(HttpStatus.OK)
+  async rotate(@CurrentUser() session: AuthenticatedSession) {
+    const { token, sessionId, expiresAt } = await this.sessionService.rotate(
+      session.sessionId,
+      session,
+    );
+
+    return { token, tokenType: "Bearer", sessionId, expiresAt };
   }
 }
