@@ -504,6 +504,7 @@ function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
       };
     }
 
+
     it("returns UNVERIFIED_ISSUER when anchoring is required and proof has no contractTransactionHash (anchoring still pending)", async () => {
       const prisma = makeVerifyProof(null); // no tx hash yet
       const service = new ProofsService(
