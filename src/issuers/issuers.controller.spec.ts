@@ -1,9 +1,9 @@
 import { NotFoundException } from "@nestjs/common";
 import { ResourceStatus } from "@prisma/client";
 import { Test, TestingModule } from "@nestjs/testing";
-import { AuthTokenService } from "../../auth/auth-token.service";
-import { AuthGuard } from "../../common/guards/auth.guard";
-import { RoleGuard } from "../../common/guards/role.guard";
+import { AuthTokenService } from "../auth/auth-token.service";
+import { AuthGuard } from "../common/guards/auth.guard";
+import { RoleGuard } from "../common/guards/role.guard";
 import { IssuersController } from "./issuers.controller";
 import { IssuersService } from "./issuers.service";
 
