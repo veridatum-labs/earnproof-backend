@@ -16,29 +16,27 @@ describe("VerificationEventService", () => {
     },
   });
 
-  const createMockConfigService = (overrides?: Record<string, any>) => ({
-    get: jest.fn((key: string) => {
-      const defaults: Record<string, any> = {
-        verificationEventRetentionDays: 90,
-        VERIFICATION_HASH_SALT_V0: "test-salt-v0-32-character-string!",
-        VERIFICATION_HASH_SALT_V1: "test-salt-v1-32-character-string!",
-        ...overrides,
-      };
-      return defaults[key];
-    }),
-  });
-
   beforeEach(() => {
     jest.clearAllMocks();
     prismaService = createMockPrismaService();
-    configService = createMockConfigService();
+    configService = {
+      get: jest.fn((key: string) => {
+        const config: Record<string, unknown> = {
+          verificationEventRetentionDays: 90,
+          VERIFICATION_HASH_SALT_VERSION: 0,
+          VERIFICATION_HASH_SALT_V0: "test-salt-v0-32-character-string!",
+          VERIFICATION_HASH_SALT_V1: "test-salt-v1-32-character-string!",
+        };
+        return config[key];
+      }),
+    } as unknown as ConfigService<Record<string, unknown>>;
 
     // Suppress logger output in tests
     jest.spyOn(Logger.prototype, "log").mockImplementation(() => {});
     jest.spyOn(Logger.prototype, "warn").mockImplementation(() => {});
     jest.spyOn(Logger.prototype, "error").mockImplementation(() => {});
 
-    service = new VerificationEventService(prismaService, configService as any);
+    service = new VerificationEventService(prismaService, configService);
   });
 
   describe("recordEvent", () => {
@@ -277,12 +275,19 @@ describe("VerificationEventService", () => {
 
     describe("retention configuration", () => {
       it("sets retainUntil correctly based on VERIFICATION_EVENT_RETENTION_DAYS", async () => {
-        const configWithRetention = createMockConfigService({
-          verificationEventRetentionDays: 60,
-        });
+        const configWithRetention = {
+          get: jest.fn((key: string) => {
+            const config: Record<string, unknown> = {
+              verificationEventRetentionDays: 60,
+              VERIFICATION_HASH_SALT_VERSION: 0,
+              VERIFICATION_HASH_SALT_V0: "test-salt-v0-32-character-string!",
+            };
+            return config[key];
+          }),
+        } as unknown as ConfigService<Record<string, unknown>>;
         const svc = new VerificationEventService(
           prismaService,
-          configWithRetention as any,
+          configWithRetention,
         );
 
         const beforeCall = Date.now();
@@ -304,12 +309,19 @@ describe("VerificationEventService", () => {
       });
 
       it("uses default 90 days when retention not configured", async () => {
-        const configNoRetention = createMockConfigService({
-          verificationEventRetentionDays: undefined,
-        });
+        const configNoRetention = {
+          get: jest.fn((key: string) => {
+            const config: Record<string, unknown> = {
+              verificationEventRetentionDays: undefined,
+              VERIFICATION_HASH_SALT_VERSION: 0,
+              VERIFICATION_HASH_SALT_V0: "test-salt-v0-32-character-string!",
+            };
+            return config[key];
+          }),
+        } as unknown as ConfigService<Record<string, unknown>>;
         const svc = new VerificationEventService(
           prismaService,
-          configNoRetention as any,
+          configNoRetention,
         );
 
         const beforeCall = Date.now();
@@ -358,12 +370,21 @@ describe("VerificationEventService", () => {
       });
 
       it("respects VERIFICATION_HASH_SALT_VERSION config", async () => {
-        const configWithVersion = createMockConfigService({
-          verificationHashSaltVersion: 2,
-        });
+        const configWithVersion = {
+          get: jest.fn((key: string) => {
+            const config: Record<string, unknown> = {
+              verificationHashSaltVersion: 2,
+              VERIFICATION_HASH_SALT_VERSION: 2,
+              VERIFICATION_HASH_SALT_V0: "test-salt-v0-32-character-string!",
+              VERIFICATION_HASH_SALT_V1: "test-salt-v1-32-character-string!",
+              VERIFICATION_HASH_SALT_V2: "test-salt-v2-32-character-string!",
+            };
+            return config[key];
+          }),
+        } as unknown as ConfigService<Record<string, unknown>>;
         const svc = new VerificationEventService(
           prismaService,
-          configWithVersion as any,
+          configWithVersion,
         );
 
         await svc.recordEvent(
@@ -416,20 +437,34 @@ describe("VerificationEventService", () => {
       it("increments saltVersion as salt rotates (different versions)", async () => {
         // We can't easily test long-term rotation in unit tests,
         // but we can verify different configured versions work
-        const configV0 = createMockConfigService({
-          verificationHashSaltVersion: 0,
-        });
+        const configV0 = {
+          get: jest.fn((key: string) => {
+            const config: Record<string, unknown> = {
+              verificationHashSaltVersion: 0,
+              VERIFICATION_HASH_SALT_V0: "test-salt-v0-32-character-string!",
+              VERIFICATION_HASH_SALT_V1: "test-salt-v1-32-character-string!",
+            };
+            return config[key];
+          }),
+        } as unknown as ConfigService<Record<string, unknown>>;
         const svcV0 = new VerificationEventService(
           prismaService,
-          configV0 as any,
+          configV0,
         );
 
-        const configV1 = createMockConfigService({
-          verificationHashSaltVersion: 1,
-        });
+        const configV1 = {
+          get: jest.fn((key: string) => {
+            const config: Record<string, unknown> = {
+              verificationHashSaltVersion: 1,
+              VERIFICATION_HASH_SALT_V0: "test-salt-v0-32-character-string!",
+              VERIFICATION_HASH_SALT_V1: "test-salt-v1-32-character-string!",
+            };
+            return config[key];
+          }),
+        } as unknown as ConfigService<Record<string, unknown>>;
         const svcV1 = new VerificationEventService(
           prismaService,
-          configV1 as any,
+          configV1,
         );
 
         const metadata = { outcome: "VALID", timestamp: new Date() };
