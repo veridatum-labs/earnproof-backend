@@ -135,6 +135,9 @@ describe("ProofsService", () => {
       proof: {
         findUnique: jest.fn().mockResolvedValue(null),
       },
+      verificationEventLog: {
+        create: jest.fn().mockResolvedValue({ id: "event_1" }),
+      },
     };
     const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
@@ -242,6 +245,7 @@ describe("ProofsService", () => {
       prisma as never,
       config as never,
       mockVerificationEventService,
+      anchoring as never,
     );
 
     await expect(service.revokeProof("user_1", "proof_anchored")).resolves.toEqual(
@@ -315,10 +319,18 @@ describe("ProofsService", () => {
         create: jest.fn().mockResolvedValue({ id: "event_1" }),
       },
     };
+    const anchoring = {
+      getProofStatus: jest.fn().mockResolvedValue({
+        checked: true,
+        revoked: true,
+        valid: false,
+      }),
+    };
     const service = new ProofsService(
       prisma as never,
       config as never,
       mockVerificationEventService,
+      anchoring as never,
     );
 
     const result = await service.verifyProof("proof_onchain_revoked");

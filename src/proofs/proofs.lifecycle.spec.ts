@@ -150,6 +150,9 @@ function createProofStore() {
           return Promise.resolve({ id: `event_${verificationEvents.length}` });
         }),
       },
+      verificationEventLog: {
+        create: jest.fn().mockResolvedValue({ id: "event_1" }),
+      },
     },
   };
 }
