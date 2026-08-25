@@ -213,6 +213,7 @@ export class TrustedSourcesController {
       example: {
         id: "ts_abc123",
         status: "DELETED",
+        retainedForHistory: true,
       },
     },
   })

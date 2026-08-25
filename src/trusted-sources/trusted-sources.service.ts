@@ -3,8 +3,10 @@ import {
   ForbiddenException,
   Injectable,
 } from "@nestjs/common";
-import { ResourceStatus } from "@prisma/client";
+import { Prisma, ResourceStatus } from "@prisma/client";
+import { StrKey } from "@stellar/stellar-base";
 import { AuthenticatedUser } from "../auth/auth.types";
+import { sha256 } from "../common/crypto/hash";
 import { PrismaService } from "../database/prisma.service";
 import { CreateTrustedSourceDto } from "./dto/create-trusted-source.dto";
 import { ListTrustedSourcesDto } from "./dto/list-trusted-sources.dto";
@@ -29,8 +31,7 @@ export class TrustedSourcesService {
    */
   private validateAddressFormat(address: string): void {
     const normalized = this.normalizeAddress(address);
-    // Basic Stellar address validation: starts with G and 56 chars long
-    if (!/^G[A-Z2-7]{54}$/.test(normalized)) {
+    if (!StrKey.isValidEd25519PublicKey(normalized)) {
       throw new BadRequestException(
         "Invalid address format. Expected a valid Stellar address.",
       );
@@ -121,8 +122,7 @@ export class TrustedSourcesService {
         resourceType: "trusted_source",
         resourceId: trustedSource.id,
         metadata: {
-          sourceAddress: normalizedAddress,
-          displayName: input.displayName || null,
+          sourceAddressHash: sha256(normalizedAddress),
           sourceType: input.sourceType || "stellar",
           issuerId: issuerId || null,
         },
@@ -139,7 +139,7 @@ export class TrustedSourcesService {
     user: AuthenticatedUser,
     filters: ListTrustedSourcesDto,
   ) {
-    const where: any = {
+    const where: Prisma.TrustedSourceWhereInput = {
       userId: user.id,
       status: ResourceStatus.ACTIVE,
     };
@@ -300,8 +300,8 @@ export class TrustedSourcesService {
         resourceType: "trusted_source",
         resourceId: trustedSourceId,
         metadata: {
-          previousDisplayName: existing.displayName || null,
-          nextDisplayName: updated.displayName || null,
+          displayNameChanged:
+            existing.displayName !== updated.displayName,
           previousIssuerId: existing.issuerId || null,
           nextIssuerId: updated.issuerId || null,
         },
@@ -338,20 +338,6 @@ export class TrustedSourcesService {
       );
     }
 
-    // Check if this trusted source has been used in any proofs
-    const proofsUsingSource = await this.prisma.proof.count({
-      where: {
-        userId: user.id,
-        // Proofs may reference payments from this source
-        // This is a simple check; in practice, you'd need a more sophisticated query
-        // based on how payments relate to trusted sources
-      },
-    });
-
-    // For now, we allow deletion. The issue specifies to "explicitly handle deletion"
-    // which could mean either preventing or marking as inactive with audit logging.
-    // We'll mark as inactive to preserve audit trails.
-
     const deleted = await this.prisma.trustedSource.update({
       where: { id: trustedSourceId },
       data: {
@@ -382,13 +368,17 @@ export class TrustedSourcesService {
         resourceType: "trusted_source",
         resourceId: trustedSourceId,
         metadata: {
-          sourceAddress: trustedSource.sourceAddress,
-          proofCount: proofsUsingSource,
+          sourceAddressHash: sha256(trustedSource.sourceAddress),
+          retentionPolicy: "soft_delete",
         },
       },
     });
 
-    return { id: deleted.id, status: deleted.status };
+    return {
+      id: deleted.id,
+      status: deleted.status,
+      retainedForHistory: true,
+    };
   }
 
   /**
