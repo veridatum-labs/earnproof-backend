@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, ServiceUnavailableException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
   HorizonCollection,
@@ -18,12 +18,21 @@ export class StellarService {
   }
 
   async fetchIncomingPayments(walletAddress: string): Promise<NormalizedPayment[]> {
-    const response = await fetch(
-      `${this.horizonUrl}/accounts/${walletAddress}/payments?limit=200&order=desc`,
-    );
+    let response: Response;
+    try {
+      response = await fetch(
+        `${this.horizonUrl}/accounts/${walletAddress}/payments?limit=200&order=desc`,
+      );
+    } catch {
+      throw new ServiceUnavailableException(
+        "Stellar Horizon is temporarily unavailable",
+      );
+    }
 
     if (!response.ok) {
-      throw new Error(`Stellar Horizon request failed with ${response.status}`);
+      throw new ServiceUnavailableException(
+        "Stellar Horizon is temporarily unavailable",
+      );
     }
 
     const data =

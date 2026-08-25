@@ -168,4 +168,3 @@ The feature is substantially implemented in the codebase. This requirements docu
 4. THE `auth.guard.spec.ts` (or equivalent guard test) SHALL contain tests covering: rejection when the `Authorization` header is absent, rejection when the header does not start with `Bearer `, rejection when SessionService throws for an invalid token, rejection when the resolved user's status is `SUSPENDED`, and successful attachment of `AuthenticatedSession` to the request for a valid token.
 5. THE `auth-token.service.spec.ts` file SHALL contain a test that imports `AuthGuard` and `AuthService` and asserts that neither module's provider list nor implementation references `AuthTokenService` in a production code path.
 6. WHEN `npm run lint`, `npm run test -- --runInBand`, and `npm run build` are executed, THE build toolchain SHALL exit with code 0 and report no errors.
-

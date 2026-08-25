@@ -42,6 +42,7 @@
     "zod": "^4.2.1"
   },
   "devDependencies": {
+    "@apidevtools/swagger-parser": "^12.1.0",
     "@nestjs/schematics": "^11.0.9",
     "@nestjs/testing": "^11.1.9",
     "@types/jest": "^30.0.0",
