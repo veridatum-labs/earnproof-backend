@@ -13,6 +13,7 @@ import { IssuersModule } from "./issuers/issuers.module";
 import { OrganizationsModule } from "./organizations/organizations.module";
 import { PaymentsModule } from "./payments/payments.module";
 import { ProofsModule } from "./proofs/proofs.module";
+import { TrustedSourcesModule } from "./trusted-sources/trusted-sources.module";
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { ProofsModule } from "./proofs/proofs.module";
     IssuersModule,
     PaymentsModule,
     ProofsModule,
+    TrustedSourcesModule,
     JobsModule,
   ],
 })
