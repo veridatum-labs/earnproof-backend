@@ -8,6 +8,7 @@ import {
 } from "@prisma/client";
 import { sha256 } from "../common/crypto/hash";
 import { ProofsService } from "./proofs.service";
+import { VerificationEventService } from "../audit/verification-event.service";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -58,12 +59,18 @@ function makeConfig(anchoringEnabled = false, anchoringRequired = false) {
   };
 }
 
-const user = {
-  id: "user_1",
-  walletAddress: "GB_TEST",
-  walletHash: "sha256:wallet",
-  role: "WORKER",
-};
+  const mockVerificationEventService = {
+    recordEvent: jest.fn().mockResolvedValue(undefined),
+    getAggregateStats: jest.fn().mockResolvedValue({}),
+    cleanupExpiredEvents: jest.fn().mockResolvedValue(0),
+  } as unknown as VerificationEventService;
+
+  const user = {
+    id: "user_1",
+    walletAddress: "GB_TEST",
+    walletHash: "sha256:wallet",
+    role: "WORKER",
+  };
 
 const singlePayment = [
   {
@@ -112,23 +119,7 @@ function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
         }),
       },
     };
-    return fn(tx);
-  });
-
-  return {
-    payment: { findMany: jest.fn().mockResolvedValue(singlePayment) },
-    $transaction: txFn,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Existing tests (preserved + adapted for outbox model)
-// ---------------------------------------------------------------------------
-
-describe("ProofsService", () => {
-  it("creates a signed minimum income proof without disclosing exact income", async () => {
-    const prisma = makeCreatePrisma();
-    const service = new ProofsService(prisma as never, makeConfig() as never);
+    const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     const result = await service.createMinimumIncomeProof(user, {
       selectedPaymentIds: ["payment_1"],
@@ -165,7 +156,7 @@ describe("ProofsService", () => {
       },
       $transaction: jest.fn(),
     };
-    const service = new ProofsService(prisma as never, makeConfig() as never);
+    const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     await expect(
       service.createMinimumIncomeProof(user, {
@@ -180,9 +171,14 @@ describe("ProofsService", () => {
 
   it("returns an unknown public verification state for missing proofs", async () => {
     const prisma = {
-      proof: { findUnique: jest.fn().mockResolvedValue(null) },
+      proof: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
+      verificationEventLog: {
+        create: jest.fn().mockResolvedValue({ id: "event_1" }),
+      },
     };
-    const service = new ProofsService(prisma as never, makeConfig() as never);
+    const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     await expect(service.verifyProof("missing")).resolves.toEqual({
       result: VerificationResult.UNKNOWN_PROOF,
@@ -238,7 +234,7 @@ describe("ProofsService", () => {
         create: jest.fn().mockResolvedValue({ id: "event_1" }),
       },
     };
-    const service = new ProofsService(prisma as never, makeConfig() as never);
+    const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     const result = await service.verifyProof("proof_1");
 
@@ -281,7 +277,9 @@ describe("ProofsService", () => {
     };
     const service = new ProofsService(
       prisma as never,
-      makeConfig(true) as never, // anchoring enabled
+      config as never,
+      mockVerificationEventService,
+      anchoring as never,
     );
 
     const result = await service.revokeProof("user_1", "proof_anchored");
@@ -354,7 +352,8 @@ describe("ProofsService", () => {
     };
     const service = new ProofsService(
       prisma as never,
-      makeConfig() as never,
+      config as never,
+      mockVerificationEventService,
       anchoring as never,
     );
 
