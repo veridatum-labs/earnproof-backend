@@ -27,6 +27,7 @@ import { sha256 } from "../common/crypto/hash";
 import { decryptProtectedAmount } from "../common/crypto/protected-amount";
 import { ApiErrorCode } from "../common/dto/api-error.dto";
 import { PrismaService } from "../database/prisma.service";
+import { WebhookDeliveryService } from "../webhooks/webhook-delivery.service";
 import { ContractAnchoringService } from "./contract-anchoring.service";
 import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.dto";
 import { CreatePaymentReceiptProofDto } from "./dto/create-payment-receipt-proof.dto";
@@ -128,6 +129,8 @@ export class ProofsService {
     private readonly verificationEventService: VerificationEventService,
     @Optional()
     private readonly contractAnchoringService?: ContractAnchoringService,
+    @Optional()
+    private readonly webhookDeliveryService?: WebhookDeliveryService,
   ) {
     this.signingSecret = configService.getOrThrow<string>(
       "credentialSigningSecret",
@@ -264,6 +267,7 @@ export class ProofsService {
       ? { anchored: false as const, reason: "pending" as const }
       : { anchored: false as const, reason: "disabled" as const };
 
+    this.emitProofCreated(user.id, proof);
     return {
       proofId: proof.id,
       status: proof.status,
@@ -507,6 +511,7 @@ export class ProofsService {
       ? { anchored: false as const, reason: "pending" as const }
       : { anchored: false as const, reason: "disabled" as const };
 
+    this.emitProofCreated(user.id, proof);
     return {
       proofId: proof.id,
       status: proof.status,
@@ -741,6 +746,12 @@ export class ProofsService {
         ? { anchored: false as const, reason: "pending" as const }
         : { anchored: false as const, reason: "disabled" as const };
 
+    this.emitWebhook(userId, "proof.revoked", {
+      proofId: updated.id,
+      status: updated.status,
+      revokedAt: updated.revokedAt?.toISOString() ?? new Date().toISOString(),
+    });
+
     return {
       ...updated,
       anchoring: anchoringResult,
@@ -884,6 +895,12 @@ export class ProofsService {
       },
     });
 
+    this.emitWebhook(proof.userId, "proof.verified", {
+      proofId: proof.id,
+      result,
+      verifiedAt: new Date().toISOString(),
+    });
+
     return {
       result,
       status: this.publicStatus(result),
@@ -902,6 +919,51 @@ export class ProofsService {
         },
       },
     };
+  }
+
+  private emitProofCreated(
+    userId: string,
+    proof: {
+      id: string;
+      proofType: ProofType;
+      schemaVersion: string;
+      status: ProofStatus;
+      network: string;
+      assetCode: string;
+      assetIssuer: string | null;
+      periodStart: Date | null;
+      periodEnd: Date | null;
+      expiresAt: Date;
+      credentialHash: string;
+      contractTransactionHash?: string | null;
+      createdAt: Date;
+    },
+  ) {
+    this.emitWebhook(userId, "proof.created", {
+      proofId: proof.id,
+      proofType: proof.proofType,
+      schemaVersion: proof.schemaVersion,
+      status: proof.status,
+      network: proof.network,
+      assetCode: proof.assetCode,
+      assetIssuer: proof.assetIssuer,
+      periodStart: proof.periodStart?.toISOString() ?? null,
+      periodEnd: proof.periodEnd?.toISOString() ?? null,
+      expiresAt: proof.expiresAt.toISOString(),
+      credentialHash: proof.credentialHash,
+      contractTransactionHash: proof.contractTransactionHash ?? null,
+      issuedAt: proof.createdAt.toISOString(),
+    });
+  }
+
+  private emitWebhook(
+    userId: string,
+    event: "proof.created" | "proof.revoked" | "proof.verified",
+    data: Record<string, unknown>,
+  ) {
+    this.webhookDeliveryService
+      ?.enqueueForUser(userId, event, { event, data } as never)
+      .catch(() => undefined);
   }
 
   private buildCredential(input: {

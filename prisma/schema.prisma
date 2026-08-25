@@ -369,17 +369,49 @@ model ApiKeyScopeAssignment {
 }
 
 model Webhook {
-  id             String          @id @default(cuid())
-  organizationId String
-  organization   Organization    @relation(fields: [organizationId], references: [id])
-  url            String
-  secretHash     String
-  events         Json
-  status         ResourceStatus  @default(ACTIVE)
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  id               String            @id @default(cuid())
+  organizationId   String
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  url              String
+  secretEncrypted  String
+  events           Json
+  status           ResourceStatus    @default(ACTIVE)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  deliveries       WebhookDelivery[]
 
   @@index([organizationId, status])
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+model WebhookDelivery {
+  id             String                @id @default(cuid())
+  webhookId      String
+  webhook        Webhook               @relation(fields: [webhookId], references: [id])
+  eventType      String
+  eventId        String
+  payload        Json
+  attempt        Int                   @default(1)
+  status         WebhookDeliveryStatus @default(PENDING)
+  statusCode     Int?
+  responseBody   String?
+  durationMs     Int?
+  failureReason  String?
+  replayOf       String?
+  replayedBy     String?
+  replayKey      String?               @unique
+  deliveredAt    DateTime?
+  nextRetryAt    DateTime?
+  createdAt      DateTime              @default(now())
+
+  @@index([webhookId, createdAt])
+  @@index([eventId])
+  @@index([status, nextRetryAt])
 }
 
 model AuditLog {
