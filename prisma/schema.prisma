@@ -72,6 +72,18 @@ enum VerificationOutcome {
   ISSUER_WARNING
 }
 
+enum AnchoringOperation {
+  REGISTER
+  REVOKE
+}
+
+enum AnchoringStatus {
+  PENDING
+  PROCESSING
+  CONFIRMED
+  FAILED
+}
+
 model User {
   id                 String          @id @default(cuid())
   walletAddress      String          @unique
@@ -343,12 +355,14 @@ model AnchoringIntent {
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 
-  // Unique constraint: only one PROCESSING or CONFIRMED intent per (proofId, operation).
-  // This enforces that the same operation (REGISTER or REVOKE) cannot be claimed or
+  // Partial unique constraint enforced via raw SQL migration:
+  // Only one PROCESSING or CONFIRMED intent per (proofId, operation).
+  // This prevents the same operation (REGISTER or REVOKE) from being claimed or
   // executed twice for a given proof, even if application logic is bypassed.
   // PENDING intents are excluded because multiple PENDING intents may exist if one
   // fails and is reset; only the claim transition is protected.
-  @@unique([proofId, operation], where: { status: { in: ["PROCESSING", "CONFIRMED"] } })
+  // Note: Prisma's @@unique does not support partial WHERE clauses; this constraint
+  // is implemented via a raw SQL partial unique index in migrations.
   @@index([nextRetryAt])
   @@index([proofId])
 }
