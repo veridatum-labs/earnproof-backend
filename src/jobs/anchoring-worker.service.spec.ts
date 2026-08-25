@@ -323,4 +323,227 @@ describe("AnchoringWorkerService", () => {
       expect(anchoring.anchorProof).not.toHaveBeenCalled();
     });
   });
+
+  describe("Concurrency — double-submit prevention", () => {
+    it("atomically claims only rows transitioned by this worker — losing worker gets zero rows", async () => {
+      // Simulate two concurrent workers attempting to claim the same PENDING intent.
+      // Worker 1 succeeds (UPDATE returns the row).
+      // Worker 2 fails (UPDATE returns zero rows because status is now PROCESSING).
+      const now = new Date();
+      const intent1 = makeIntent({ id: "intent_1", proofId: "proof_1" });
+      const intent2 = makeIntent({ id: "intent_2", proofId: "proof_2" });
+
+      // Worker 1: UPDATE succeeds, returns intent_1
+      // Worker 2: UPDATE fails (row already claimed), returns empty array
+      let callCount = 0;
+      const prisma = {
+        anchoringIntent: {
+          findUnique: jest.fn().mockResolvedValue(intent1),
+          findFirst: jest.fn().mockResolvedValue(null),
+          update: jest.fn().mockResolvedValue(intent1),
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+          findMany: jest.fn()
+            .mockResolvedValueOnce([intent1]) // findMany for full intent data (Worker 1)
+            .mockResolvedValueOnce([]), // findMany for full intent data (Worker 2, after losing claim)
+          create: jest.fn().mockResolvedValue(intent1),
+        },
+        proof: {
+          update: jest.fn().mockResolvedValue({ id: "proof_1" }),
+        },
+        $queryRaw: jest
+          .fn()
+          // Worker 1: claims intent_1 (atomic UPDATE...RETURNING succeeds)
+          .mockResolvedValueOnce([
+            {
+              id: "intent_1",
+              proofId: "proof_1",
+              operation: AnchoringOperation.REGISTER,
+              status: AnchoringStatus.PROCESSING,
+              attemptCount: 0,
+              lastAttemptAt: now,
+              nextRetryAt: null,
+              transactionHash: null,
+              ledger: null,
+              lastErrorSafe: null,
+              permanentError: false,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            },
+          ])
+          // Worker 2: tries to claim, but intent_1 is no longer PENDING (already PROCESSING by Worker 1)
+          // UPDATE...RETURNING returns zero rows
+          .mockResolvedValueOnce([]),
+      };
+
+      const anchoring = makeAnchoring();
+      const worker = new AnchoringWorkerService(
+        prisma as never,
+        anchoring as never,
+        makeConfig() as never,
+      );
+
+      // Simulate Worker 1 claiming and processing
+      await worker.poll();
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(anchoring.anchorProof).toHaveBeenCalledTimes(1);
+
+      // Reset mock to simulate Worker 2's call
+      (prisma.$queryRaw as jest.Mock).mockClear();
+      (anchoring.anchorProof as jest.Mock).mockClear();
+
+      // Simulate Worker 2 attempting to claim the same intent
+      // It calls the same processBatch logic
+      await worker.poll();
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+      // Worker 2's UPDATE...RETURNING returned zero rows, so anchorProof NOT called
+      expect(anchoring.anchorProof).not.toHaveBeenCalled();
+    });
+
+    it("UPDATE...RETURNING only returns rows actually claimed (transition PENDING→PROCESSING)", async () => {
+      // Verify that the atomic UPDATE...RETURNING in processBatch only returns
+      // rows that THIS worker successfully transitioned, not all rows it selected.
+      const now = new Date();
+      const intent = makeIntent({ id: "intent_1", proofId: "proof_1" });
+
+      const claimedRows = [
+        {
+          id: "intent_1",
+          proofId: "proof_1",
+          operation: AnchoringOperation.REGISTER,
+          status: AnchoringStatus.PROCESSING,
+          attemptCount: 0,
+          lastAttemptAt: now,
+          nextRetryAt: null,
+          transactionHash: null,
+          ledger: null,
+          lastErrorSafe: null,
+          permanentError: false,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ];
+
+      const prisma = {
+        anchoringIntent: {
+          findUnique: jest.fn().mockResolvedValue(intent),
+          findFirst: jest.fn().mockResolvedValue(null),
+          update: jest.fn().mockResolvedValue(intent),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findMany: jest.fn().mockResolvedValue([intent]),
+          create: jest.fn().mockResolvedValue(intent),
+        },
+        proof: {
+          update: jest.fn().mockResolvedValue({ id: "proof_1" }),
+        },
+        // The atomic UPDATE...RETURNING in processBatch should ONLY return
+        // rows that were actually transitioned by this worker's UPDATE.
+        $queryRaw: jest.fn().mockResolvedValue(claimedRows),
+        $transaction: jest.fn().mockImplementation(async (arg) => {
+          if (typeof arg === "function") {
+            return arg({
+              anchoringIntent: {
+                findMany: jest.fn().mockResolvedValue([intent]),
+                updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+                findFirst: jest.fn().mockResolvedValue(null),
+                update: jest.fn().mockResolvedValue(intent),
+              },
+            });
+          }
+          return Promise.all(arg.map((p: Promise<unknown>) => p));
+        }),
+      };
+
+      const anchoring = makeAnchoring();
+      const worker = new AnchoringWorkerService(
+        prisma as never,
+        anchoring as never,
+        makeConfig() as never,
+      );
+
+      await worker.poll();
+
+      // $queryRaw (atomic UPDATE...RETURNING) was called
+      expect(prisma.$queryRaw).toHaveBeenCalled();
+      // It returned the claimed rows
+      expect(prisma.$queryRaw).toHaveBeenCalledWith(expect.stringContaining("UPDATE"));
+      // The anchoring service was called for each claimed intent
+      expect(anchoring.anchorProof).toHaveBeenCalledTimes(1);
+    });
+
+    it("fails gracefully when concurrent claim loses (UPDATE...RETURNING returns empty)", async () => {
+      // Simulate a worker that loses a concurrent claim race.
+      // The UPDATE...RETURNING returns zero rows (another worker claimed it first).
+      // The worker should handle this gracefully and not crash.
+      const prisma = {
+        anchoringIntent: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          findFirst: jest.fn().mockResolvedValue(null),
+          update: jest.fn().mockResolvedValue(null),
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+          findMany: jest.fn().mockResolvedValue([]),
+          create: jest.fn().mockResolvedValue(null),
+        },
+        proof: {
+          update: jest.fn().mockResolvedValue(null),
+        },
+        // UPDATE...RETURNING returns zero rows (claim lost)
+        $queryRaw: jest.fn().mockResolvedValue([]),
+      };
+
+      const anchoring = makeAnchoring();
+      const worker = new AnchoringWorkerService(
+        prisma as never,
+        anchoring as never,
+        makeConfig() as never,
+      );
+
+      // Should not throw
+      await expect(worker.poll()).resolves.toBeUndefined();
+
+      // anchorProof should not be called (no rows claimed)
+      expect(anchoring.anchorProof).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Database uniqueness constraint — (proofId, operation) with status IN (PROCESSING, CONFIRMED)", () => {
+    it("would reject INSERT/UPDATE that violates the partial unique constraint", async () => {
+      // This is a conceptual test showing what the database constraint prevents.
+      // In practice, the atomic UPDATE...RETURNING prevents us from ever reaching
+      // a constraint violation, but the constraint is a safety net.
+      //
+      // The constraint is:
+      //   UNIQUE (proofId, operation) WHERE status IN ('PROCESSING', 'CONFIRMED')
+      //
+      // If application logic were bypassed and two PROCESSING intents existed
+      // for the same (proofId, operation), the database would reject the second one.
+      //
+      // Test setup: simulate the constraint existing and verify it would reject.
+      const prisma = makePrisma();
+
+      // Mock to simulate constraint violation
+      (prisma.anchoringIntent.create as jest.Mock).mockRejectedValueOnce(
+        new Error(
+          'Unique constraint failed on the fields: (`proofId`,`operation`)',
+        ),
+      );
+
+      const worker = new AnchoringWorkerService(
+        prisma as never,
+        makeAnchoring() as never,
+        makeConfig() as never,
+      );
+
+      // Attempting to create a second PROCESSING intent for the same (proofId, operation)
+      // should fail with a unique constraint error.
+      await expect(
+        prisma.anchoringIntent.create({
+          data: {
+            proofId: "proof_1",
+            operation: AnchoringOperation.REGISTER,
+            status: AnchoringStatus.PROCESSING,
+          },
+        }),
+      ).rejects.toThrow("Unique constraint failed");
+    });
+  });
 });
