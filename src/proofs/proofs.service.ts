@@ -30,10 +30,15 @@ import { PrismaService } from "../database/prisma.service";
 import { ContractAnchoringService } from "./contract-anchoring.service";
 import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.dto";
 import { CreatePaymentReceiptProofDto } from "./dto/create-payment-receipt-proof.dto";
+import {
+  CreateRecurringIncomeProofDto,
+  IntervalUnit,
+} from "./dto/create-recurring-income-proof.dto";
 import { ListProofsDto } from "./dto/list-proofs.dto";
 
 const SCHEMA_VERSION = "earnproof.minimum-income.v1";
 const PAYMENT_RECEIPT_SCHEMA_VERSION = "earnproof.payment-receipt.v1";
+const RECURRING_INCOME_SCHEMA_VERSION = "earnproof.recurring-income.v1";
 const DEFAULT_EXPIRY_DAYS = 30;
 
 type MinimumIncomeCredential = {
@@ -80,7 +85,34 @@ type PaymentReceiptCredential = {
   expiresAt: string;
 };
 
-type EarnProofCredential = MinimumIncomeCredential | PaymentReceiptCredential;
+type RecurringIncomeCredential = {
+  id: string;
+  type: "EarnProofRecurringIncomeCredential";
+  schemaVersion: "earnproof.recurring-income.v1";
+  issuer: "earnproof-backend";
+  subject: { walletHash: string };
+  claim: {
+    cadence: string;
+    intervalUnit: IntervalUnit;
+    intervalCount: number;
+    assetCode: string;
+    assetIssuer: string | null;
+    periodStart: string;
+    periodEnd: string;
+    qualifyingPaymentCount: number;
+  };
+  privacy: {
+    exactIncomeHidden: true;
+    sourceTransactionsHidden: true;
+  };
+  issuedAt: string;
+  expiresAt: string;
+};
+
+type EarnProofCredential =
+  | MinimumIncomeCredential
+  | PaymentReceiptCredential
+  | RecurringIncomeCredential;
 
 @Injectable()
 export class ProofsService {
@@ -484,6 +516,175 @@ export class ProofsService {
     };
   }
 
+  async createRecurringIncomeProof(
+    user: AuthenticatedUser,
+    input: CreateRecurringIncomeProofDto,
+  ) {
+    const periodStart = new Date(input.periodStart);
+    const periodEnd = new Date(input.periodEnd);
+    if (periodStart >= periodEnd) {
+      throw new BadRequestException("periodStart must be before periodEnd");
+    }
+
+    const intervals = this.buildRecurringIntervals(
+      periodStart,
+      periodEnd,
+      input.intervalUnit,
+      input.intervalCount,
+    );
+    const selectedPaymentIds = [...new Set(input.selectedPaymentIds)];
+    const payments = await this.prisma.payment.findMany({
+      where: { id: { in: selectedPaymentIds }, userId: user.id },
+      select: {
+        id: true,
+        assetCode: true,
+        assetIssuer: true,
+        classification: true,
+        isEligible: true,
+        occurredAt: true,
+      },
+    });
+
+    if (payments.length !== selectedPaymentIds.length) {
+      throw new BadRequestException(
+        "One or more selected payments are invalid",
+      );
+    }
+
+    for (const payment of payments) {
+      if (
+        payment.classification !== PaymentClassification.INCOME ||
+        !payment.isEligible
+      ) {
+        throw new BadRequestException(
+          "Selected payments must be eligible income payments",
+        );
+      }
+      if (
+        payment.assetCode !== input.assetCode ||
+        (payment.assetIssuer ?? null) !== (input.assetIssuer ?? null)
+      ) {
+        throw new BadRequestException(
+          "Selected payments must use the requested asset",
+        );
+      }
+      if (payment.occurredAt < periodStart || payment.occurredAt > periodEnd) {
+        throw new BadRequestException(
+          "Selected payments must fall inside the requested period",
+        );
+      }
+    }
+
+    const missingIntervals = intervals.filter(
+      ([start, end]) =>
+        !payments.some(
+          (payment) =>
+            payment.occurredAt >= start && payment.occurredAt <= end,
+        ),
+    );
+    if (missingIntervals.length > 0) {
+      throw new BadRequestException(
+        `Recurring income proof unsatisfied: ${missingIntervals.length} of ${intervals.length} interval(s) contain no qualifying payment`,
+      );
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(
+      now.getTime() +
+        (input.expiresInDays ?? DEFAULT_EXPIRY_DAYS) * 24 * 60 * 60 * 1000,
+    );
+    const proofId = randomUUID();
+    const cadence = `${input.intervalUnit}:${input.intervalCount}`;
+    const draftCredential = this.buildRecurringIncomeCredential({
+      id: proofId,
+      walletHash: user.walletHash,
+      cadence,
+      intervalUnit: input.intervalUnit,
+      intervalCount: input.intervalCount,
+      assetCode: input.assetCode,
+      assetIssuer: input.assetIssuer ?? null,
+      periodStart,
+      periodEnd,
+      qualifyingPaymentCount: payments.length,
+      issuedAt: now,
+      expiresAt,
+    });
+    const credentialHash = `sha256:${sha256(canonicalize(draftCredential))}`;
+    const commitment = `sha256:${sha256(credentialHash)}`;
+
+    const proof = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.proof.create({
+        data: {
+          id: proofId,
+          userId: user.id,
+          proofType: ProofType.RECURRING_INCOME,
+          schemaVersion: RECURRING_INCOME_SCHEMA_VERSION,
+          status: ProofStatus.ACTIVE,
+          network: this.stellarNetwork,
+          assetCode: input.assetCode,
+          assetIssuer: input.assetIssuer ?? null,
+          periodStart,
+          periodEnd,
+          expiresAt,
+          createdAt: now,
+          credentialHash,
+          commitment,
+          claim: {
+            create: {
+              operator: "recurring",
+              frequency: cadence,
+              result: true,
+              disclosurePolicy: {
+                exactIncomeHidden: true,
+                sourceTransactionsHidden: true,
+                qualifyingPaymentCount: payments.length,
+                intervalUnit: input.intervalUnit,
+                intervalCount: input.intervalCount,
+              },
+            },
+          },
+        },
+        include: { claim: true },
+      });
+
+      if (this.anchoringEnabled) {
+        await tx.anchoringIntent.create({
+          data: {
+            proofId: created.id,
+            operation: AnchoringOperation.REGISTER,
+            status: AnchoringStatus.PENDING,
+          },
+        });
+      }
+      return created;
+    });
+
+    const credential = this.buildRecurringIncomeCredential({
+      id: proof.id,
+      walletHash: user.walletHash,
+      cadence,
+      intervalUnit: input.intervalUnit,
+      intervalCount: input.intervalCount,
+      assetCode: input.assetCode,
+      assetIssuer: input.assetIssuer ?? null,
+      periodStart,
+      periodEnd,
+      qualifyingPaymentCount: payments.length,
+      issuedAt: proof.createdAt,
+      expiresAt: proof.expiresAt,
+    });
+
+    return {
+      proofId: proof.id,
+      status: proof.status,
+      verificationUrl: `/api/v1/proofs/${proof.id}/verify`,
+      credential: this.signCredential(credential),
+      anchoring: this.anchoringEnabled
+        ? { anchored: false as const, reason: "pending" as const }
+        : { anchored: false as const, reason: "disabled" as const },
+    };
+  }
+
   async revokeProof(userId: string, proofId: string) {
     const proof = await this.prisma.proof.findUnique({
       where: {
@@ -581,13 +782,33 @@ export class ProofsService {
       };
     }
 
+    const policy = this.jsonPolicy(proof.claim.disclosurePolicy);
+    const cadence = this.revealCadence(proof.claim.frequency);
     const credential =
-      proof.proofType === ProofType.PAYMENT_RECEIPT
-        ? this.rebuildPaymentReceiptCredential({
-            ...proof,
-            claim: proof.claim!,
+      proof.proofType === ProofType.RECURRING_INCOME
+        ? this.buildRecurringIncomeCredential({
+            id: proof.id,
+            walletHash: proof.user.walletHash,
+            cadence: proof.claim.frequency ?? "invalid",
+            intervalUnit: cadence?.intervalUnit ?? "month",
+            intervalCount: cadence?.intervalCount ?? 0,
+            assetCode: proof.assetCode,
+            assetIssuer: proof.assetIssuer,
+            periodStart: proof.periodStart ?? proof.createdAt,
+            periodEnd: proof.periodEnd ?? proof.createdAt,
+            qualifyingPaymentCount:
+              typeof policy["qualifyingPaymentCount"] === "number"
+                ? policy["qualifyingPaymentCount"]
+                : 0,
+            issuedAt: proof.createdAt,
+            expiresAt: proof.expiresAt,
           })
-        : this.buildCredential({
+        : proof.proofType === ProofType.PAYMENT_RECEIPT
+          ? this.rebuildPaymentReceiptCredential({
+              ...proof,
+              claim: proof.claim!,
+            })
+          : this.buildCredential({
             id: proof.id,
             walletHash: proof.user.walletHash,
             thresholdAmount: this.revealThreshold(
@@ -757,6 +978,97 @@ export class ProofsService {
       },
       issuedAt: input.issuedAt.toISOString(),
       expiresAt: input.expiresAt.toISOString(),
+    };
+  }
+
+  private buildRecurringIncomeCredential(input: {
+    id: string;
+    walletHash: string;
+    cadence: string;
+    intervalUnit: IntervalUnit;
+    intervalCount: number;
+    assetCode: string;
+    assetIssuer: string | null;
+    periodStart: Date;
+    periodEnd: Date;
+    qualifyingPaymentCount: number;
+    issuedAt: Date;
+    expiresAt: Date;
+  }): RecurringIncomeCredential {
+    return {
+      id: input.id,
+      type: "EarnProofRecurringIncomeCredential",
+      schemaVersion: RECURRING_INCOME_SCHEMA_VERSION,
+      issuer: "earnproof-backend",
+      subject: { walletHash: input.walletHash },
+      claim: {
+        cadence: input.cadence,
+        intervalUnit: input.intervalUnit,
+        intervalCount: input.intervalCount,
+        assetCode: input.assetCode,
+        assetIssuer: input.assetIssuer,
+        periodStart: input.periodStart.toISOString(),
+        periodEnd: input.periodEnd.toISOString(),
+        qualifyingPaymentCount: input.qualifyingPaymentCount,
+      },
+      privacy: {
+        exactIncomeHidden: true,
+        sourceTransactionsHidden: true,
+      },
+      issuedAt: input.issuedAt.toISOString(),
+      expiresAt: input.expiresAt.toISOString(),
+    };
+  }
+
+  private buildRecurringIntervals(
+    periodStart: Date,
+    periodEnd: Date,
+    unit: IntervalUnit,
+    count: number,
+  ): Array<[Date, Date]> {
+    const finalIntervalStart = this.addIntervalUnit(
+      periodStart,
+      unit,
+      count - 1,
+    );
+    const cadenceEnd = this.addIntervalUnit(periodStart, unit, count);
+    if (periodEnd < finalIntervalStart || periodEnd >= cadenceEnd) {
+      throw new BadRequestException(
+        "The overall period must contain exactly the requested number of cadence intervals",
+      );
+    }
+
+    return Array.from({ length: count }, (_, index) => {
+      const start = this.addIntervalUnit(periodStart, unit, index);
+      const nextStart = this.addIntervalUnit(periodStart, unit, index + 1);
+      const naturalEnd = new Date(nextStart.getTime() - 1);
+      return [start, naturalEnd < periodEnd ? naturalEnd : periodEnd];
+    });
+  }
+
+  private addIntervalUnit(date: Date, unit: IntervalUnit, amount: number) {
+    const result = new Date(date);
+    if (unit === "day") {
+      result.setUTCDate(result.getUTCDate() + amount);
+    } else if (unit === "week") {
+      result.setUTCDate(result.getUTCDate() + amount * 7);
+    } else {
+      result.setUTCMonth(result.getUTCMonth() + amount);
+    }
+    return result;
+  }
+
+  private revealCadence(frequency: string | null) {
+    const match = /^(day|week|month):([1-9]\d*)$/.exec(frequency ?? "");
+    if (!match) return null;
+
+    const intervalCount = Number(match[2]);
+    if (!Number.isSafeInteger(intervalCount) || intervalCount > 120) {
+      return null;
+    }
+    return {
+      intervalUnit: match[1] as IntervalUnit,
+      intervalCount,
     };
   }
 

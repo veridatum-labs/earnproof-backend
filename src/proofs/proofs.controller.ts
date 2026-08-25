@@ -22,6 +22,7 @@ import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { AuthGuard } from "../common/guards/auth.guard";
 import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.dto";
 import { CreatePaymentReceiptProofDto } from "./dto/create-payment-receipt-proof.dto";
+import { CreateRecurringIncomeProofDto } from "./dto/create-recurring-income-proof.dto";
 import { ListProofsDto } from "./dto/list-proofs.dto";
 import { ProofCreatedDto } from "./dto/proof-created.dto";
 import {
@@ -174,6 +175,37 @@ export class ProofsController {
     @Body() body: CreateMinimumIncomeProofDto,
   ) {
     return this.proofsService.createMinimumIncomeProof(user, body);
+  }
+
+  @ApiOperation({
+    summary: "Create a recurring-income proof",
+    description:
+      "Issues a privacy-preserving credential when every requested cadence interval contains at least one eligible income payment in the selected asset.",
+  })
+  @ApiBearerAuth()
+  @ApiResponse({
+    status: HttpStatus.CREATED,
+    description: "Recurring-income proof created.",
+    type: ProofCreatedDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.BAD_REQUEST,
+    description:
+      "The cadence is unsatisfied or a selected payment violates the ownership, classification, eligibility, asset, or period rules.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @UseGuards(AuthGuard)
+  @Post("recurring-income")
+  createRecurringIncomeProof(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: CreateRecurringIncomeProofDto,
+  ) {
+    return this.proofsService.createRecurringIncomeProof(user, body);
   }
 
   @ApiOperation({
