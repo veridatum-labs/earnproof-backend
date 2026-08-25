@@ -308,7 +308,6 @@ model ApiKeyScopeAssignment {
   scope    ApiKeyScope
 
   @@unique([apiKeyId, scope])
-  @@index([apiKeyId])
 }
 
 model Webhook {
