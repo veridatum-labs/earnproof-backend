@@ -21,9 +21,14 @@ describe("IssuersController", () => {
   const mockIssuer = {
     id: "issuer-1",
     organizationId: "org-1",
-    stellarAddress: "GBUQWP3BOUZX34ULNQG23RQ6F4BVWCIBTBTQUGS7SEEDS23ABC123DEF45",
+    stellarAddress:
+      "GBUQWP3BOUZX34ULNQG23RQ6F4BVWCIBTBTQUGS7SEEDS23ABC123DEF45",
     status: ResourceStatus.PENDING,
     metadataHash: "hash123",
+    publicMetadata: { name: "Test Issuer" },
+    contractSyncState: "PENDING",
+    contractTransactionHash: null,
+    contractSyncedAt: null,
     verifiedAt: null,
     suspendedAt: null,
     revokedAt: null,
@@ -33,7 +38,8 @@ describe("IssuersController", () => {
 
   const mockPublicIssuer = {
     id: "issuer-1",
-    stellarAddress: "GBUQWP3BOUZX34ULNQG23RQ6F4BVWCIBTBTQUGS7SEEDS23ABC123DEF45",
+    stellarAddress:
+      "GBUQWP3BOUZX34ULNQG23RQ6F4BVWCIBTBTQUGS7SEEDS23ABC123DEF45",
     trustStatus: "PENDING" as const,
     publicMetadata: {
       name: "Test Issuer",
@@ -105,12 +111,10 @@ describe("IssuersController", () => {
         },
       };
 
-      jest
-        .spyOn(service, "updateIssuerMetadata")
-        .mockResolvedValue({
-          ...mockIssuer,
-          metadataHash: "newhash",
-        });
+      jest.spyOn(service, "updateIssuerMetadata").mockResolvedValue({
+        ...mockIssuer,
+        metadataHash: "newhash",
+      });
 
       const result = await controller.updateIssuerMetadata(
         mockUser,
@@ -131,13 +135,11 @@ describe("IssuersController", () => {
     it("should call service and return result", async () => {
       const input = { status: ResourceStatus.ACTIVE };
 
-      jest
-        .spyOn(service, "updateIssuerStatus")
-        .mockResolvedValue({
-          ...mockIssuer,
-          status: ResourceStatus.ACTIVE,
-          verifiedAt: new Date(),
-        });
+      jest.spyOn(service, "updateIssuerStatus").mockResolvedValue({
+        ...mockIssuer,
+        status: ResourceStatus.ACTIVE,
+        verifiedAt: new Date(),
+      });
 
       const result = await controller.updateIssuerStatus(
         mockUser,
@@ -159,6 +161,7 @@ describe("IssuersController", () => {
       const response = {
         issuerId: "issuer-1",
         synced: true,
+        state: "SYNCED" as const,
         transactionHash: "tx123",
         currentStatus: ResourceStatus.ACTIVE,
       };
@@ -178,6 +181,7 @@ describe("IssuersController", () => {
       const response = {
         issuerId: "issuer-1",
         synced: false,
+        state: "FAILED" as const,
         reason: "failed",
         error: "Network error",
         currentStatus: ResourceStatus.PENDING,
@@ -215,7 +219,9 @@ describe("IssuersController", () => {
 
   describe("getIssuerPublic", () => {
     it("should return public issuer details with redacted metadata", async () => {
-      jest.spyOn(service, "getIssuerPublic").mockResolvedValue(mockPublicIssuer);
+      jest
+        .spyOn(service, "getIssuerPublic")
+        .mockResolvedValue(mockPublicIssuer);
 
       const result = await controller.getIssuerPublic("issuer-1");
 

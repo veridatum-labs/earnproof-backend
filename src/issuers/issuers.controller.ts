@@ -78,7 +78,8 @@ export class IssuersController {
   @RequiredRole("ADMIN")
   @ApiOperation({
     summary: "Update issuer public metadata",
-    description: "Admin-only endpoint to update issuer metadata (name, description, logo)",
+    description:
+      "Admin-only endpoint to update issuer metadata (name, description, logo)",
   })
   @ApiResponse({
     status: 200,
@@ -178,25 +179,6 @@ export class IssuersController {
     return this.issuersService.listIssuersPublic(query);
   }
 
-  @Get(":id")
-  @ApiOperation({
-    summary: "Get issuer details (public)",
-    description:
-      "Public endpoint to get issuer details with allowlisted metadata and trust status",
-  })
-  @ApiResponse({
-    status: 200,
-    description: "Issuer retrieved successfully",
-    type: IssuerPublicResponseDto,
-  })
-  @ApiResponse({
-    status: 404,
-    description: "Issuer not found",
-  })
-  getIssuerPublic(@Param("id") issuerId: string) {
-    return this.issuersService.getIssuerPublic(issuerId);
-  }
-
   @Get("admin/:id")
   @ApiBearerAuth()
   @UseGuards(AuthGuard, RoleGuard)
@@ -238,5 +220,24 @@ export class IssuersController {
   })
   listIssuersAdmin(@Query() query: ListIssuersDto) {
     return this.issuersService.listIssuers(query);
+  }
+
+  @Get(":id")
+  @ApiOperation({
+    summary: "Get issuer details (public)",
+    description:
+      "Public endpoint to get issuer details with allowlisted metadata and trust status",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Issuer retrieved successfully",
+    type: IssuerPublicResponseDto,
+  })
+  @ApiResponse({
+    status: 404,
+    description: "Issuer not found",
+  })
+  getIssuerPublic(@Param("id") issuerId: string) {
+    return this.issuersService.getIssuerPublic(issuerId);
   }
 }

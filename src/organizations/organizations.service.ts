@@ -20,10 +20,8 @@ export class OrganizationsService {
     user: AuthenticatedUser,
     input: CreateOrganizationDto,
   ): Promise<OrganizationResponseDto> {
-    if (user.role !== "ADMIN" && user.role !== "ISSUER") {
-      throw new ForbiddenException(
-        "Only admins and issuers can create organizations",
-      );
+    if (user.role !== "ADMIN") {
+      throw new ForbiddenException("Only admins can create organizations");
     }
 
     // Check if slug already exists
@@ -88,9 +86,15 @@ export class OrganizationsService {
   }
 
   async getOrganization(
+    user: AuthenticatedUser,
     organizationId: string,
   ): Promise<OrganizationResponseDto> {
     const org = await this.getOrganizationById(organizationId);
+    if (user.role !== "ADMIN" && org.createdById !== user.id) {
+      throw new ForbiddenException(
+        "You do not have permission to access this organization",
+      );
+    }
     const issuerCount = await this.prisma.issuer.count({
       where: { organizationId },
     });
@@ -181,28 +185,23 @@ export class OrganizationsService {
     };
   }
 
-  private async createAuditLog(
+  private createAuditLog(
     user: AuthenticatedUser,
     action: string,
     resourceType: string,
     resourceId: string,
     metadata: any,
   ) {
-    try {
-      await this.prisma.auditLog.create({
-        data: {
-          actorId: user.id,
-          actorType: "User",
-          action,
-          resourceType,
-          resourceId,
-          metadata,
-          createdAt: new Date(),
-        },
-      });
-    } catch (error) {
-      // Audit logging failures should not break operations
-      console.warn("Failed to create audit log:", error);
-    }
+    return this.prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        actorType: "User",
+        action,
+        resourceType,
+        resourceId,
+        metadata,
+        createdAt: new Date(),
+      },
+    });
   }
 }

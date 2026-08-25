@@ -23,10 +23,14 @@ export class OrganizationResponseDto {
   @ApiProperty({ description: "ID of user who created the organization" })
   createdById: string;
 
-  @ApiProperty({ description: "ISO 8601 timestamp when organization was created" })
+  @ApiProperty({
+    description: "ISO 8601 timestamp when organization was created",
+  })
   createdAt: Date;
 
-  @ApiProperty({ description: "ISO 8601 timestamp when organization was last updated" })
+  @ApiProperty({
+    description: "ISO 8601 timestamp when organization was last updated",
+  })
   updatedAt: Date;
 
   @ApiProperty({

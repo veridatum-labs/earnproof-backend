@@ -63,6 +63,15 @@ enum VerificationResult {
   UNVERIFIED_ISSUER
 }
 
+enum VerificationOutcome {
+  VALID
+  EXPIRED
+  REVOKED
+  UNKNOWN
+  INVALID_SIGNATURE
+  ISSUER_WARNING
+}
+
 model User {
   id                 String          @id @default(cuid())
   walletAddress      String          @unique
@@ -78,6 +87,7 @@ model User {
   proofs             Proof[]
   createdApiKeys     ApiKey[]
   auditLogs          AuditLog[]
+  sessions           AuthSession[]
 
   @@index([walletHash])
   @@index([status])
@@ -94,6 +104,30 @@ model WalletChallenge {
 
   @@index([walletAddress])
   @@index([expiresAt])
+}
+
+/// Persisted, revocable authentication session.
+/// Only a SHA-256 hash of the opaque bearer token is stored — the raw token is never
+/// written to the database or to any application log.
+model AuthSession {
+  id          String    @id @default(cuid())
+  /// SHA-256 hex digest of the raw opaque session token.
+  tokenHash   String    @unique
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime
+  lastUsedAt  DateTime?
+  /// Set when the session is explicitly revoked (logout or rotation).
+  revokedAt   DateTime?
+  /// Links to the replacement session produced during rotation.
+  rotatedToId String?   @unique
+  rotatedTo   AuthSession? @relation("SessionRotation", fields: [rotatedToId], references: [id])
+  rotatedFrom AuthSession? @relation("SessionRotation")
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([revokedAt])
 }
 
 model Organization {
@@ -120,6 +154,12 @@ model Issuer {
   stellarAddress  String          @unique
   status          ResourceStatus  @default(PENDING)
   metadataHash    String?
+  publicMetadata  Json?
+  contractSyncState       String          @default("PENDING")
+  contractSyncedStatus    ResourceStatus?
+  contractTransactionHash String?
+  contractSyncedAt         DateTime?
+  contractSyncError        String?
   verifiedAt      DateTime?
   suspendedAt     DateTime?
   revokedAt       DateTime?
@@ -157,7 +197,7 @@ model Payment {
   assetIssuer            String?
   amountEncrypted        String?
   occurredAt             DateTime
-  memo                   String?
+  memo                   Json?
   classification         PaymentClassification  @default(UNKNOWN)
   isEligible             Boolean                @default(false)
   createdAt              DateTime               @default(now())
@@ -255,6 +295,20 @@ model VerificationEvent {
 
   @@index([proofId, createdAt])
   @@index([result])
+}
+
+model VerificationEventLog {
+  id           String              @id @default(cuid())
+  outcome      VerificationOutcome
+  proofId      String
+  metadataHash String
+  saltVersion  Int
+  createdAt    DateTime            @default(now())
+  retainUntil  DateTime
+
+  @@index([proofId, createdAt])
+  @@index([outcome])
+  @@index([retainUntil])
 }
 
 model ApiKey {

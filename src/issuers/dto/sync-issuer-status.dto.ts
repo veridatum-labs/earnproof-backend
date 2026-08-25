@@ -10,6 +10,12 @@ export class SyncIssuerStatusResponseDto {
   synced: boolean;
 
   @ApiProperty({
+    enum: ["SYNCED", "PENDING", "FAILED", "DISABLED"],
+    description: "Durable state of the latest synchronization request",
+  })
+  state: "SYNCED" | "PENDING" | "FAILED" | "DISABLED";
+
+  @ApiProperty({
     description: "Reason if not synced (disabled, failed, etc.)",
     nullable: true,
   })
@@ -31,4 +37,7 @@ export class SyncIssuerStatusResponseDto {
     description: "Current database status after sync attempt",
   })
   currentStatus: string;
+
+  @ApiProperty({ nullable: true })
+  operation?: string;
 }

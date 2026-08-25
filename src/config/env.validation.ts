@@ -1,7 +1,10 @@
 import { z } from "zod";
 
 const optionalString = (schema: z.ZodString) =>
-  z.preprocess((value) => (value === "" ? undefined : value), schema.optional());
+  z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    schema.optional(),
+  );
 
 const encryptionKey = z.string().refine((value) => {
   const key = /^[a-fA-F0-9]{64}$/.test(value)
@@ -38,10 +41,27 @@ const envSchema = z.object({
   PROOF_REGISTRY_CONTRACT_ID: optionalString(
     z.string().regex(/^C[A-Z2-7]{55}$/),
   ),
-  EARNPROOF_ISSUER_ADDRESS: optionalString(
-    z.string().regex(/^G[A-Z2-7]{55}$/),
+  ISSUER_REGISTRY_ENABLED: z
+    .enum(["true", "false"])
+    .optional()
+    .default("false"),
+  ISSUER_REGISTRY_CONTRACT_ID: optionalString(
+    z.string().regex(/^C[A-Z2-7]{55}$/),
   ),
+  EARNPROOF_ISSUER_ADDRESS: optionalString(z.string().regex(/^G[A-Z2-7]{55}$/)),
   EARNPROOF_SCHEMA_VERSION: z.coerce.number().int().positive().optional(),
+  VERIFICATION_EVENT_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .default(90),
+  VERIFICATION_HASH_SALT_VERSION: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .default(0),
 });
 
 export function validateEnv(config: Record<string, unknown>) {

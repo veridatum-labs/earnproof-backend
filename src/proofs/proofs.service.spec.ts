@@ -6,6 +6,7 @@ import {
 } from "@prisma/client";
 import { sha256 } from "../common/crypto/hash";
 import { ProofsService } from "./proofs.service";
+import { VerificationEventService } from "../audit/verification-event.service";
 
 describe("ProofsService", () => {
   const config = {
@@ -18,6 +19,12 @@ describe("ProofsService", () => {
       return values[key];
     }),
   };
+
+  const mockVerificationEventService = {
+    recordEvent: jest.fn().mockResolvedValue(undefined),
+    getAggregateStats: jest.fn().mockResolvedValue({}),
+    cleanupExpiredEvents: jest.fn().mockResolvedValue(0),
+  } as unknown as VerificationEventService;
 
   const user = {
     id: "user_1",
@@ -63,7 +70,7 @@ describe("ProofsService", () => {
         })),
       },
     };
-    const service = new ProofsService(prisma as never, config as never);
+    const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     const result = await service.createMinimumIncomeProof(user, {
       selectedPaymentIds: ["payment_1"],
@@ -79,6 +86,10 @@ describe("ProofsService", () => {
     expect(result.credential.claim.qualifyingPaymentCount).toBe(1);
     expect(JSON.stringify(result)).not.toContain("125.50");
     expect(JSON.stringify(result)).not.toContain("payment_1");
+    expect(JSON.stringify(result)).not.toMatch(/memo(Context)?/i);
+    expect(prisma.payment.findMany.mock.calls[0][0].select).not.toHaveProperty(
+      "memo",
+    );
     expect(result.credential.proof.signature).toMatch(/^hmac-sha256:/);
     expect(prisma.proof.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -110,7 +121,7 @@ describe("ProofsService", () => {
         ]),
       },
     };
-    const service = new ProofsService(prisma as never, config as never);
+    const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     await expect(
       service.createMinimumIncomeProof(user, {
@@ -128,8 +139,11 @@ describe("ProofsService", () => {
       proof: {
         findUnique: jest.fn().mockResolvedValue(null),
       },
+      verificationEventLog: {
+        create: jest.fn().mockResolvedValue({ id: "event_1" }),
+      },
     };
-    const service = new ProofsService(prisma as never, config as never);
+    const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     await expect(service.verifyProof("missing")).resolves.toEqual({
       result: VerificationResult.UNKNOWN_PROOF,
@@ -195,9 +209,11 @@ describe("ProofsService", () => {
         create: jest.fn().mockResolvedValue({ id: "event_1" }),
       },
     };
-    const service = new ProofsService(prisma as never, config as never);
+    const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     const result = await service.verifyProof("proof_1");
+
+    expect(JSON.stringify(result)).not.toMatch(/memo(Context)?/i);
 
     expect(result.result).toBe(VerificationResult.REVOKED);
     expect(result.status).toBe("revoked");
@@ -234,6 +250,7 @@ describe("ProofsService", () => {
     const service = new ProofsService(
       prisma as never,
       config as never,
+      mockVerificationEventService,
       anchoring as never,
     );
 
@@ -318,6 +335,7 @@ describe("ProofsService", () => {
     const service = new ProofsService(
       prisma as never,
       config as never,
+      mockVerificationEventService,
       anchoring as never,
     );
 

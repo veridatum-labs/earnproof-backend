@@ -4,15 +4,18 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
-  Optional,
 } from "@nestjs/common";
 import { Prisma, ResourceStatus } from "@prisma/client";
 import { createHash } from "crypto";
 import { AuthenticatedUser } from "../auth/auth.types";
+import { sha256 } from "../common/crypto/hash";
 import { PrismaService } from "../database/prisma.service";
-import { ContractAnchoringService } from "../proofs/contract-anchoring.service";
+import { IssuerRegistryService } from "./issuer-registry.service";
 import { CreateIssuerDto } from "./dto/create-issuer.dto";
-import { IssuerPublicResponseDto, IssuerResponseDto } from "./dto/issuer-response.dto";
+import {
+  IssuerPublicResponseDto,
+  IssuerResponseDto,
+} from "./dto/issuer-response.dto";
 import { ListIssuersDto } from "./dto/list-issuers.dto";
 import { SyncIssuerStatusResponseDto } from "./dto/sync-issuer-status.dto";
 import { UpdateIssuerMetadataDto } from "./dto/update-issuer-metadata.dto";
@@ -31,8 +34,7 @@ const VALID_TRANSITIONS: Record<ResourceStatus, ResourceStatus[]> = {
 export class IssuersService {
   constructor(
     private readonly prisma: PrismaService,
-    @Optional()
-    private readonly contractAnchoringService?: ContractAnchoringService,
+    private readonly issuerRegistryService: IssuerRegistryService,
   ) {}
 
   async createIssuer(
@@ -77,13 +79,15 @@ export class IssuersService {
       throw new BadRequestException("Invalid Stellar public key format");
     }
 
+    const publicMetadata = this.allowlistedMetadata(input.publicMetadata);
     const issuer = await this.prisma.issuer.create({
       data: {
         organizationId: input.organizationId,
         stellarAddress: input.stellarAddress,
         status: ResourceStatus.PENDING,
-        metadataHash: input.publicMetadata
-          ? this.hashMetadata(input.publicMetadata)
+        publicMetadata,
+        metadataHash: Object.keys(publicMetadata).length
+          ? this.hashMetadata(publicMetadata)
           : null,
       },
     });
@@ -92,7 +96,7 @@ export class IssuersService {
     await this.createAuditLog(user, "CREATE", "Issuer", issuer.id, {
       organizationId: input.organizationId,
       stellarAddress: input.stellarAddress,
-      publicMetadata: input.publicMetadata,
+      publicMetadata,
     });
 
     return this.toResponseDto(issuer);
@@ -108,12 +112,16 @@ export class IssuersService {
     }
 
     const issuer = await this.getIssuerById(issuerId);
-    const metadataHash = this.hashMetadata(input.publicMetadata);
+    const publicMetadata = this.allowlistedMetadata(input.publicMetadata);
+    const metadataHash = this.hashMetadata(publicMetadata);
 
     const updated = await this.prisma.issuer.update({
       where: { id: issuerId },
       data: {
         metadataHash,
+        publicMetadata,
+        contractSyncState: "PENDING",
+        contractSyncError: null,
       },
     });
 
@@ -121,7 +129,7 @@ export class IssuersService {
     await this.createAuditLog(user, "UPDATE_METADATA", "Issuer", issuerId, {
       previousMetadataHash: issuer.metadataHash,
       newMetadataHash: metadataHash,
-      publicMetadata: input.publicMetadata,
+      publicMetadata,
     });
 
     return this.toResponseDto(updated);
@@ -143,19 +151,27 @@ export class IssuersService {
     if (!validNextStatuses.includes(input.status)) {
       throw new BadRequestException(
         `Invalid status transition: ${issuer.status} → ${input.status}. ` +
-        `Valid transitions from ${issuer.status} are: ${validNextStatuses.join(", ") || "none"}`,
+          `Valid transitions from ${issuer.status} are: ${validNextStatuses.join(", ") || "none"}`,
       );
     }
 
     const now = new Date();
     const updateData: any = {
       status: input.status,
+      contractSyncState: "PENDING",
+      contractSyncError: null,
     };
 
     // Update timestamp fields based on transition
-    if (input.status === ResourceStatus.ACTIVE && issuer.status === ResourceStatus.PENDING) {
+    if (
+      input.status === ResourceStatus.ACTIVE &&
+      issuer.status === ResourceStatus.PENDING
+    ) {
       updateData.verifiedAt = now;
-    } else if (input.status === ResourceStatus.SUSPENDED && issuer.status === ResourceStatus.ACTIVE) {
+    } else if (
+      input.status === ResourceStatus.SUSPENDED &&
+      issuer.status === ResourceStatus.ACTIVE
+    ) {
       updateData.suspendedAt = now;
     } else if (input.status === ResourceStatus.REVOKED) {
       updateData.revokedAt = now;
@@ -185,9 +201,7 @@ export class IssuersService {
     const issuer = await this.getIssuerById(issuerId);
 
     // For public endpoint, only expose allowlisted metadata
-    const publicMetadata = issuer.metadataHash
-      ? this.extractAllowlistedMetadata()
-      : {};
+    const publicMetadata = this.allowlistedMetadata(issuer.publicMetadata);
 
     return {
       id: issuer.id,
@@ -246,9 +260,7 @@ export class IssuersService {
 
     // Public endpoint only shows active/trusted issuers
     const where: Prisma.IssuerWhereInput = {
-      status: {
-        in: [ResourceStatus.ACTIVE, ResourceStatus.PENDING],
-      },
+      status: ResourceStatus.ACTIVE,
     };
 
     if (query.organizationId) {
@@ -267,9 +279,7 @@ export class IssuersService {
 
     return {
       items: items.map((issuer) => {
-        const publicMetadata = issuer.metadataHash
-          ? this.extractAllowlistedMetadata()
-          : {};
+        const publicMetadata = this.allowlistedMetadata(issuer.publicMetadata);
 
         return {
           id: issuer.id,
@@ -295,80 +305,60 @@ export class IssuersService {
 
     const issuer = await this.getIssuerById(issuerId);
 
-    // If contract anchoring is disabled, return disabled state
-    if (!this.contractAnchoringService) {
-      return {
-        issuerId,
-        synced: false,
-        reason: "disabled",
-        currentStatus: issuer.status,
-      };
-    }
+    const result = await this.issuerRegistryService.sync({
+      issuerId: issuer.id,
+      stellarAddress: issuer.stellarAddress,
+      metadataHash: issuer.metadataHash ?? sha256("{}"),
+      status: issuer.status,
+      contractSyncedStatus: issuer.contractSyncedStatus,
+    });
+    const state = result.state.toUpperCase() as
+      "SYNCED" | "PENDING" | "FAILED" | "DISABLED";
+    const syncedAt = new Date();
 
-    try {
-      // For issuers, we sync their status to the contract
-      // This records the issuer's trust status on-chain
-      const commitment = JSON.stringify({
-        issuerId: issuer.id,
-        stellarAddress: issuer.stellarAddress,
-        status: issuer.status,
-        timestamp: new Date().toISOString(),
-      });
+    await this.prisma.issuer.update({
+      where: { id: issuerId },
+      data:
+        result.state === "synced"
+          ? {
+              contractSyncState: state,
+              contractSyncedStatus: issuer.status,
+              contractTransactionHash: result.transactionHash,
+              contractSyncedAt: syncedAt,
+              contractSyncError: null,
+            }
+          : {
+              contractSyncState: state,
+              contractSyncError:
+                result.state === "failed" ? result.error : result.reason,
+            },
+    });
+    await this.createAuditLog(user, "SYNC_STATUS", "Issuer", issuerId, {
+      state,
+      status: issuer.status,
+      ...(result.state === "synced"
+        ? {
+            operation: result.operation,
+            transactionHash: result.transactionHash,
+          }
+        : { reason: result.reason }),
+    });
 
-      const result = await this.contractAnchoringService.anchorProof({
-        proofId: `issuer:${issuer.id}`,
-        commitment,
-        expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year
-      });
-
-      if (result.anchored) {
-        // Record the sync attempt
-        await this.createAuditLog(user, "SYNC_STATUS", "Issuer", issuerId, {
-          transactionHash: result.transactionHash,
-          status: issuer.status,
-          syncedAt: new Date().toISOString(),
-        });
-
-        return {
-          issuerId,
-          synced: true,
-          transactionHash: result.transactionHash,
-          currentStatus: issuer.status,
-        };
-      } else {
-        // Record failed sync
-        await this.createAuditLog(user, "SYNC_STATUS_FAILED", "Issuer", issuerId, {
-          reason: result.reason,
-          error: result.error,
-          status: issuer.status,
-          syncedAt: new Date().toISOString(),
-        });
-
-        return {
-          issuerId,
-          synced: false,
-          reason: result.reason,
-          error: result.error,
-          currentStatus: issuer.status,
-        };
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-      await this.createAuditLog(user, "SYNC_STATUS_ERROR", "Issuer", issuerId, {
-        error: errorMessage,
-        status: issuer.status,
-        syncedAt: new Date().toISOString(),
-      });
-
-      return {
-        issuerId,
-        synced: false,
-        reason: "failed",
-        error: errorMessage,
-        currentStatus: issuer.status,
-      };
-    }
+    return {
+      issuerId,
+      synced: result.state === "synced",
+      state,
+      currentStatus: issuer.status,
+      ...(result.state === "synced"
+        ? {
+            operation: result.operation,
+            transactionHash: result.transactionHash,
+          }
+        : {
+            reason: result.reason,
+            ...(result.state === "failed" ? { error: result.error } : {}),
+          }),
+    };
   }
 
   async getIssuerById(issuerId: string) {
@@ -386,18 +376,23 @@ export class IssuersService {
   private computeTrustStatus(
     issuer: any,
   ): "TRUSTED" | "PENDING" | "SUSPENDED" | "REVOKED" {
-    if (issuer.revokedAt) return "REVOKED";
-    if (issuer.suspendedAt) return "SUSPENDED";
-    if (issuer.verifiedAt) return "TRUSTED";
+    if (issuer.status === ResourceStatus.REVOKED) return "REVOKED";
+    if (issuer.status === ResourceStatus.SUSPENDED) return "SUSPENDED";
+    if (issuer.status === ResourceStatus.ACTIVE && issuer.verifiedAt)
+      return "TRUSTED";
     return "PENDING";
   }
 
-  private extractAllowlistedMetadata(): Record<string, any> {
-    // In a real implementation, we would store metadata separately
-    // and retrieve it here. For now, return empty object since
-    // we only store the hash in the Issuer model.
-    // This is a placeholder for the architecture.
-    return {};
+  private allowlistedMetadata(metadata: unknown): Record<string, string> {
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+      return {};
+    }
+    const source = metadata as Record<string, unknown>;
+    return Object.fromEntries(
+      ["name", "description", "logoUrl"]
+        .filter((key) => typeof source[key] === "string")
+        .map((key) => [key, source[key] as string]),
+    );
   }
 
   private hashMetadata(metadata: Record<string, any>): string {
@@ -417,6 +412,10 @@ export class IssuersService {
       stellarAddress: issuer.stellarAddress,
       status: issuer.status,
       metadataHash: issuer.metadataHash,
+      publicMetadata: this.allowlistedMetadata(issuer.publicMetadata),
+      contractSyncState: issuer.contractSyncState,
+      contractTransactionHash: issuer.contractTransactionHash,
+      contractSyncedAt: issuer.contractSyncedAt,
       verifiedAt: issuer.verifiedAt,
       suspendedAt: issuer.suspendedAt,
       revokedAt: issuer.revokedAt,
@@ -425,28 +424,23 @@ export class IssuersService {
     };
   }
 
-  private async createAuditLog(
+  private createAuditLog(
     user: AuthenticatedUser,
     action: string,
     resourceType: string,
     resourceId: string,
     metadata: any,
   ) {
-    try {
-      await this.prisma.auditLog.create({
-        data: {
-          actorId: user.id,
-          actorType: "User",
-          action,
-          resourceType,
-          resourceId,
-          metadata,
-          createdAt: new Date(),
-        },
-      });
-    } catch (error) {
-      // Audit logging failures should not break operations
-      console.warn("Failed to create audit log:", error);
-    }
+    return this.prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        actorType: "User",
+        action,
+        resourceType,
+        resourceId,
+        metadata,
+        createdAt: new Date(),
+      },
+    });
   }
 }

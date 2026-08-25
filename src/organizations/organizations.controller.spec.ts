@@ -83,12 +83,10 @@ describe("OrganizationsController", () => {
     it("should call service and return result", async () => {
       const input = { name: "Updated Name" };
 
-      jest
-        .spyOn(service, "updateOrganization")
-        .mockResolvedValue({
-          ...mockOrganization,
-          name: input.name,
-        });
+      jest.spyOn(service, "updateOrganization").mockResolvedValue({
+        ...mockOrganization,
+        name: input.name,
+      });
 
       const result = await controller.updateOrganization(
         mockUser,
@@ -110,10 +108,10 @@ describe("OrganizationsController", () => {
       const response = { ...mockOrganization, issuerCount: 2 };
       jest.spyOn(service, "getOrganization").mockResolvedValue(response);
 
-      const result = await controller.getOrganization("org-1");
+      const result = await controller.getOrganization(mockUser, "org-1");
 
       expect(result).toEqual(response);
-      expect(service.getOrganization).toHaveBeenCalledWith("org-1");
+      expect(service.getOrganization).toHaveBeenCalledWith(mockUser, "org-1");
     });
 
     it("should handle 404 from service", async () => {
@@ -121,9 +119,9 @@ describe("OrganizationsController", () => {
         .spyOn(service, "getOrganization")
         .mockRejectedValue(new NotFoundException());
 
-      await expect(controller.getOrganization("nonexistent")).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        controller.getOrganization(mockUser, "nonexistent"),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 

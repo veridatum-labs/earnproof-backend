@@ -8,7 +8,12 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
-import { ApiBearerAuth, ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
+import {
+  ApiBearerAuth,
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+} from "@nestjs/swagger";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { RequiredRole } from "../common/decorators/required-role.decorator";
 import { AuthGuard } from "../common/guards/auth.guard";
@@ -31,7 +36,8 @@ export class OrganizationsController {
   @RequiredRole("ADMIN")
   @ApiOperation({
     summary: "Create a new organization",
-    description: "Admin-only endpoint to create a new organization with pending status",
+    description:
+      "Admin-only endpoint to create a new organization with pending status",
   })
   @ApiResponse({
     status: 201,
@@ -75,7 +81,8 @@ export class OrganizationsController {
   @UseGuards(AuthGuard)
   @ApiOperation({
     summary: "Get organization details",
-    description: "Retrieve full details of an organization including issuer count",
+    description:
+      "Retrieve full details of an organization including issuer count",
   })
   @ApiResponse({
     status: 200,
@@ -86,15 +93,19 @@ export class OrganizationsController {
     status: 404,
     description: "Organization not found",
   })
-  getOrganization(@Param("id") organizationId: string) {
-    return this.organizationsService.getOrganization(organizationId);
+  getOrganization(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") organizationId: string,
+  ) {
+    return this.organizationsService.getOrganization(user, organizationId);
   }
 
   @Patch(":id")
   @UseGuards(AuthGuard, RoleGuard)
   @ApiOperation({
     summary: "Update organization",
-    description: "Update organization name and/or website. Only creator or admin can update.",
+    description:
+      "Update organization name and/or website. Only creator or admin can update.",
   })
   @ApiResponse({
     status: 200,

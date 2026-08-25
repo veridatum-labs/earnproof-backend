@@ -24,6 +24,24 @@ export class IssuerResponseDto {
   metadataHash: string | null;
 
   @ApiPropertyOptional({
+    description: "Allowlisted issuer metadata stored by the API.",
+    nullable: true,
+  })
+  publicMetadata?: Record<string, string> | null;
+
+  @ApiProperty({
+    description: "Latest issuer-registry synchronization state.",
+    enum: ["PENDING", "SYNCED", "FAILED", "DISABLED"],
+  })
+  contractSyncState: string;
+
+  @ApiPropertyOptional({ nullable: true })
+  contractTransactionHash?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  contractSyncedAt?: Date | null;
+
+  @ApiPropertyOptional({
     description: "ISO 8601 timestamp when issuer was verified/activated",
     nullable: true,
   })
@@ -44,7 +62,9 @@ export class IssuerResponseDto {
   @ApiProperty({ description: "ISO 8601 timestamp when issuer was created" })
   createdAt: Date;
 
-  @ApiProperty({ description: "ISO 8601 timestamp when issuer was last updated" })
+  @ApiProperty({
+    description: "ISO 8601 timestamp when issuer was last updated",
+  })
   updatedAt: Date;
 }
 
@@ -56,12 +76,14 @@ export class IssuerPublicResponseDto {
   stellarAddress: string;
 
   @ApiProperty({
-    description: "Effective trust status (based on status, suspension, and revocation)",
+    description:
+      "Effective trust status (based on status, suspension, and revocation)",
   })
   trustStatus: "TRUSTED" | "PENDING" | "SUSPENDED" | "REVOKED";
 
   @ApiProperty({
-    description: "Allowlisted public metadata (name, description, logoUrl only)",
+    description:
+      "Allowlisted public metadata (name, description, logoUrl only)",
   })
   publicMetadata: {
     name?: string;
