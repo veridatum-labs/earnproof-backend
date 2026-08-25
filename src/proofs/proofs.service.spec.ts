@@ -74,21 +74,27 @@ const user = {
 
 const config = makeConfig();
 
-/**
- * Build a minimal Prisma mock for proof creation.
- * Captures writes so tests can inspect them.
- */
-const singlePayment = [
-  {
-    id: "payment_1",
-    assetCode: "XLM",
-    assetIssuer: null,
-    amountEncrypted: `redacted:${Buffer.from("125.50").toString("base64url")}`,
-    classification: PaymentClassification.INCOME,
-    isEligible: true,
-    occurredAt: new Date("2026-08-01T00:00:00.000Z"),
-  },
-];
+    expect(result.status).toBe(ProofStatus.ACTIVE);
+    expect(result.credential.claim.thresholdAmount).toBe("100");
+    expect(result.credential.claim.qualifyingPaymentCount).toBe(1);
+    expect(JSON.stringify(result)).not.toContain("125.50");
+    expect(JSON.stringify(result)).not.toContain("payment_1");
+    expect(JSON.stringify(result)).not.toMatch(/memo(Context)?/i);
+    expect(prisma.payment.findMany.mock.calls[0][0].select).not.toHaveProperty(
+      "memo",
+    );
+    expect(result.credential.proof.signature).toMatch(/^hmac-sha256:/);
+    expect(prisma.proof.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          proofType: ProofType.MINIMUM_INCOME,
+          credentialHash: expect.stringMatching(/^sha256:/),
+          commitment: expect.stringMatching(/^sha256:/),
+          createdAt: expect.any(Date),
+        }),
+      }),
+    );
+  });
 
 function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
   return {
@@ -227,6 +233,8 @@ describe("ProofsService", () => {
     const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     const result = await service.verifyProof("proof_1");
+
+    expect(JSON.stringify(result)).not.toMatch(/memo(Context)?/i);
 
     expect(result.result).toBe(VerificationResult.REVOKED);
     expect(result.status).toBe("revoked");
