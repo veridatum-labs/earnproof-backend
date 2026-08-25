@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { PaymentClassification, ResourceStatus } from "@prisma/client";
+import { Payment, PaymentClassification, ResourceStatus } from "@prisma/client";
 import { encryptProtectedAmount } from "../common/crypto/protected-amount";
 import { PrismaService } from "../database/prisma.service";
 import { StellarService } from "../stellar/stellar.service";
@@ -97,11 +97,11 @@ export class PaymentsService {
     };
   }
 
-  listPayments(
+  async listPayments(
     userId: string,
     filters: { classification?: PaymentClassification; assetCode?: string },
   ) {
-    return this.prisma.payment.findMany({
+    const payments = await this.prisma.payment.findMany({
       where: {
         userId,
         classification: filters.classification,
@@ -112,6 +112,8 @@ export class PaymentsService {
       },
       take: 100,
     });
+
+    return payments.map((payment) => this.toPaymentResponse(payment));
   }
 
   async getPayment(userId: string, paymentId: string) {
@@ -126,7 +128,7 @@ export class PaymentsService {
       throw new NotFoundException("Payment not found");
     }
 
-    return payment;
+    return this.toPaymentResponse(payment);
   }
 
   async updateClassification(
@@ -178,7 +180,7 @@ export class PaymentsService {
       },
     });
 
-    return updated;
+    return this.toPaymentResponse(updated);
   }
 
   private assetKey(code: string, issuer: string | null) {
@@ -187,5 +189,24 @@ export class PaymentsService {
 
   private protectAmount(amount: string) {
     return encryptProtectedAmount(amount, this.paymentEncryptionKey);
+  }
+
+  private toPaymentResponse(payment: Payment) {
+    return {
+      id: payment.id,
+      userId: payment.userId,
+      stellarTransactionHash: payment.stellarTransactionHash,
+      operationId: payment.operationId,
+      sourceAddress: payment.sourceAddress,
+      destinationAddress: payment.destinationAddress,
+      assetCode: payment.assetCode,
+      assetIssuer: payment.assetIssuer,
+      occurredAt: payment.occurredAt,
+      memo: payment.memo,
+      classification: payment.classification,
+      isEligible: payment.isEligible,
+      createdAt: payment.createdAt,
+      updatedAt: payment.updatedAt,
+    };
   }
 }

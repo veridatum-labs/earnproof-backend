@@ -73,9 +73,15 @@ export class VerifyProofResponseDto {
   })
   status!: string;
 
-  @ApiProperty({ type: () => SignedCredentialDto })
-  credential!: SignedCredentialDto;
+  @ApiPropertyOptional({
+    type: () => SignedCredentialDto,
+    description: "Absent when the proof ID is unknown.",
+  })
+  credential?: SignedCredentialDto;
 
-  @ApiProperty({ type: () => ProofSummaryDto })
-  proof!: ProofSummaryDto;
+  @ApiPropertyOptional({
+    type: () => ProofSummaryDto,
+    description: "Absent when the proof ID is unknown.",
+  })
+  proof?: ProofSummaryDto;
 }

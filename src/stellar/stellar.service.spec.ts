@@ -54,4 +54,21 @@ describe("StellarService", () => {
       }),
     ]);
   });
+
+  it.each([
+    ["a non-success response", { ok: false, status: 503 }],
+    ["a network failure", new TypeError("fetch failed")],
+  ])("maps %s to a safe dependency error", async (_label, result) => {
+    global.fetch =
+      result instanceof Error
+        ? (jest.fn().mockRejectedValue(result) as never)
+        : (jest.fn().mockResolvedValue(result) as never);
+    const service = new StellarService({
+      getOrThrow: () => "https://horizon-testnet.stellar.org",
+    } as unknown as ConfigService);
+
+    await expect(service.fetchIncomingPayments("GB")).rejects.toMatchObject({
+      status: 503,
+    });
+  });
 });

@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   HttpStatus,
   NotFoundException,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
@@ -170,6 +171,21 @@ describe("GlobalExceptionFilter", () => {
       filter.catch(new ForbiddenException(), host);
       expect(status).toHaveBeenCalledWith(HttpStatus.FORBIDDEN);
       expect(json.mock.calls[0][0]).toMatchObject({ code: ApiErrorCode.FORBIDDEN });
+    });
+
+    it("maps dependency exceptions to 503 DEPENDENCY_UNAVAILABLE", () => {
+      const { host, json, status } = makeHost();
+      filter.catch(
+        new ServiceUnavailableException("private dependency detail"),
+        host,
+      );
+      expect(status).toHaveBeenCalledWith(HttpStatus.SERVICE_UNAVAILABLE);
+      expect(json.mock.calls[0][0]).toMatchObject({
+        code: ApiErrorCode.DEPENDENCY_UNAVAILABLE,
+      });
+      expect(JSON.stringify(json.mock.calls[0][0])).not.toContain(
+        "private dependency detail",
+      );
     });
   });
 

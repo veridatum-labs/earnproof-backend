@@ -119,6 +119,46 @@ describe("PaymentsService", () => {
     );
   });
 
+  it("never returns the protected amount ciphertext from payment reads", async () => {
+    const payment = {
+      id: "payment_1",
+      userId: "user_1",
+      stellarTransactionHash: "tx_1",
+      operationId: "op_1",
+      sourceAddress: "GA",
+      destinationAddress: "GB",
+      assetCode: "XLM",
+      assetIssuer: null,
+      amountEncrypted: "enc:v1:sensitive-ciphertext",
+      occurredAt: new Date("2026-07-13T00:00:00Z"),
+      memo: null,
+      classification: PaymentClassification.INCOME,
+      isEligible: true,
+      createdAt: new Date("2026-07-13T00:00:00Z"),
+      updatedAt: new Date("2026-07-13T00:00:00Z"),
+    };
+    const prisma = {
+      payment: {
+        findMany: jest.fn().mockResolvedValue([payment]),
+        findFirst: jest.fn().mockResolvedValue(payment),
+      },
+    };
+    const service = new PaymentsService(
+      prisma as never,
+      {} as never,
+      config as never,
+    );
+
+    const [listed] = await service.listPayments("user_1", {});
+    const detail = await service.getPayment("user_1", "payment_1");
+
+    expect(listed).not.toHaveProperty("amountEncrypted");
+    expect(detail).not.toHaveProperty("amountEncrypted");
+    expect(JSON.stringify([listed, detail])).not.toContain(
+      "sensitive-ciphertext",
+    );
+  });
+
   it("does not make unsupported assets eligible during classification", async () => {
     const prisma = {
       payment: {

@@ -21,10 +21,10 @@
     "prisma:studio": "prisma studio"
   },
   "dependencies": {
+    "@nestjs/cli": "^11.0.14",
     "@nestjs/common": "^11.1.9",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.1.9",
-    "@nestjs/cli": "^11.0.14",
     "@nestjs/platform-express": "^11.1.9",
     "@nestjs/swagger": "11.4.6",
     "@prisma/client": "^6.19.3",
@@ -41,6 +41,7 @@
     "zod": "^4.2.1"
   },
   "devDependencies": {
+    "@apidevtools/swagger-parser": "^12.1.0",
     "@nestjs/schematics": "^11.0.9",
     "@nestjs/testing": "^11.1.9",
     "@types/jest": "^30.0.0",

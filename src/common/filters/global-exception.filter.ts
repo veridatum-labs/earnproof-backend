@@ -191,6 +191,15 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       };
     }
 
+    if (status === HttpStatus.SERVICE_UNAVAILABLE) {
+      return {
+        statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+        code: ApiErrorCode.DEPENDENCY_UNAVAILABLE,
+        message:
+          "A required service dependency is temporarily unavailable. Please try again later.",
+      };
+    }
+
     if (status === HttpStatus.BAD_REQUEST) {
       // Safe to surface the developer-authored message for 400s from service layer.
       const msg = this.extractSafeMessage(raw);

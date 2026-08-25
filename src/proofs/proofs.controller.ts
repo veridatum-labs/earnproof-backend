@@ -23,6 +23,7 @@ import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.d
 import { ProofCreatedDto } from "./dto/proof-created.dto";
 import { RevokeProofResponseDto } from "./dto/revoke-proof-response.dto";
 import { VerifyProofResponseDto } from "./dto/verify-proof-response.dto";
+import { VerificationStatsDto } from "./dto/verification-stats.dto";
 import { ProofsService } from "./proofs.service";
 
 @ApiTags("proofs")
@@ -127,6 +128,32 @@ export class ProofsController {
   }
 
   @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Get aggregate verification statistics for a proof",
+    description:
+      "Returns privacy-safe outcome counts. Only the proof owner may access these statistics; verifier identity is never returned.",
+  })
+  @ApiParam({ name: "id", description: "Proof ID (uuid)." })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "Aggregate verification outcome counts.",
+    type: VerificationStatsDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.FORBIDDEN,
+    description: "The proof belongs to another user.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: "Proof not found.",
+    type: ApiErrorDto,
+  })
   @UseGuards(AuthGuard)
   @Get(":id/verification-stats")
   getVerificationStats(
