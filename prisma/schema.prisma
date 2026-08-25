@@ -203,7 +203,7 @@ model Payment {
   assetIssuer            String?
   amountEncrypted        String?
   occurredAt             DateTime
-  memo                   String?
+  memo                   Json?
   classification         PaymentClassification  @default(UNKNOWN)
   isEligible             Boolean                @default(false)
   createdAt              DateTime               @default(now())
