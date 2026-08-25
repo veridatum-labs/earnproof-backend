@@ -186,7 +186,7 @@ export class IssuersService {
 
     // For public endpoint, only expose allowlisted metadata
     const publicMetadata = issuer.metadataHash
-      ? this.extractAllowlistedMetadata(issuer.metadataHash)
+      ? this.extractAllowlistedMetadata()
       : {};
 
     return {
@@ -268,7 +268,7 @@ export class IssuersService {
     return {
       items: items.map((issuer) => {
         const publicMetadata = issuer.metadataHash
-          ? this.extractAllowlistedMetadata(issuer.metadataHash)
+          ? this.extractAllowlistedMetadata()
           : {};
 
         return {
@@ -392,9 +392,7 @@ export class IssuersService {
     return "PENDING";
   }
 
-  private extractAllowlistedMetadata(
-    metadataHash: string,
-  ): Record<string, any> {
+  private extractAllowlistedMetadata(): Record<string, any> {
     // In a real implementation, we would store metadata separately
     // and retrieve it here. For now, return empty object since
     // we only store the hash in the Issuer model.
