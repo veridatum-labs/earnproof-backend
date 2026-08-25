@@ -1,5 +1,6 @@
 import {
   ArrayMinSize,
+  ArrayUnique,
   IsArray,
   IsDateString,
   IsIn,
@@ -16,6 +17,7 @@ export type IntervalUnit = (typeof INTERVAL_UNITS)[number];
 export class CreateRecurringIncomeProofDto {
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayUnique()
   @IsString({ each: true })
   selectedPaymentIds!: string[];
 

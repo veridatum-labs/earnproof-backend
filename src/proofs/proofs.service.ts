@@ -2,12 +2,17 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
-  Optional,
   NotFoundException,
+  Optional,
+  UnprocessableEntityException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
+  AnchoringOperation,
+  AnchoringStatus,
   PaymentClassification,
+  Proof,
+  ProofClaim,
   Prisma,
   ProofStatus,
   ProofType,
@@ -17,18 +22,23 @@ import {
 import { createHmac, randomUUID } from "crypto";
 import { VerificationEventService } from "../audit/verification-event.service";
 import { AuthenticatedUser } from "../auth/auth.types";
+import { canonicalize } from "../common/crypto/canonicalize";
 import { sha256 } from "../common/crypto/hash";
 import { decryptProtectedAmount } from "../common/crypto/protected-amount";
+import { ApiErrorCode } from "../common/dto/api-error.dto";
 import { PrismaService } from "../database/prisma.service";
 import { ContractAnchoringService } from "./contract-anchoring.service";
 import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.dto";
+import { CreatePaymentReceiptProofDto } from "./dto/create-payment-receipt-proof.dto";
 import {
   CreateRecurringIncomeProofDto,
   IntervalUnit,
 } from "./dto/create-recurring-income-proof.dto";
+import { ListProofsDto } from "./dto/list-proofs.dto";
 
 const SCHEMA_VERSION = "earnproof.minimum-income.v1";
-const SCHEMA_VERSION_RECURRING = "earnproof.recurring-income.v1";
+const PAYMENT_RECEIPT_SCHEMA_VERSION = "earnproof.payment-receipt.v1";
+const RECURRING_INCOME_SCHEMA_VERSION = "earnproof.recurring-income.v1";
 const DEFAULT_EXPIRY_DAYS = 30;
 
 type MinimumIncomeCredential = {
@@ -56,16 +66,32 @@ type MinimumIncomeCredential = {
   expiresAt: string;
 };
 
+type PaymentReceiptCredential = {
+  id: string;
+  type: "EarnProofPaymentReceiptCredential";
+  schemaVersion: "earnproof.payment-receipt.v1";
+  issuer: "earnproof-backend";
+  subject: { walletHash: string };
+  claim: {
+    assetCode: string;
+    assetIssuer: string | null;
+    occurredAt: string;
+    paymentReferenceHash: string;
+    sourceAddress?: string;
+    amount?: string;
+  };
+  privacy: { senderHidden: boolean; amountHidden: boolean };
+  issuedAt: string;
+  expiresAt: string;
+};
+
 type RecurringIncomeCredential = {
   id: string;
   type: "EarnProofRecurringIncomeCredential";
-  schemaVersion: string;
+  schemaVersion: "earnproof.recurring-income.v1";
   issuer: "earnproof-backend";
-  subject: {
-    walletHash: string;
-  };
+  subject: { walletHash: string };
   claim: {
-    /** Cadence descriptor, e.g. "monthly:3" */
     cadence: string;
     intervalUnit: IntervalUnit;
     intervalCount: number;
@@ -83,11 +109,18 @@ type RecurringIncomeCredential = {
   expiresAt: string;
 };
 
+type EarnProofCredential =
+  | MinimumIncomeCredential
+  | PaymentReceiptCredential
+  | RecurringIncomeCredential;
+
 @Injectable()
 export class ProofsService {
   private readonly signingSecret: string;
   private readonly paymentEncryptionKey: string;
   private readonly stellarNetwork: string;
+  private readonly anchoringEnabled: boolean;
+  private readonly anchoringRequired: boolean;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -103,6 +136,207 @@ export class ProofsService {
       "paymentEncryptionKey",
     );
     this.stellarNetwork = configService.getOrThrow<string>("stellar.network");
+    this.anchoringEnabled =
+      configService.get<boolean>("contractAnchoring.enabled") ?? false;
+    this.anchoringRequired =
+      configService.get<boolean>("contractAnchoring.required") ?? false;
+  }
+
+  async createPaymentReceiptProof(
+    user: AuthenticatedUser,
+    input: CreatePaymentReceiptProofDto,
+  ) {
+    const payment = await this.prisma.payment.findFirst({
+      where: { id: input.paymentId, userId: user.id },
+      select: {
+        operationId: true,
+        sourceAddress: true,
+        assetCode: true,
+        assetIssuer: true,
+        amountEncrypted: true,
+        classification: true,
+        isEligible: true,
+        occurredAt: true,
+      },
+    });
+
+    if (!payment) {
+      throw new NotFoundException({
+        code: ApiErrorCode.PAYMENT_NOT_FOUND,
+        message: "Payment not found",
+      });
+    }
+    if (!payment.isEligible) {
+      throw new UnprocessableEntityException({
+        code: ApiErrorCode.PAYMENT_NOT_ELIGIBLE,
+        message: "Payment is not eligible for proof issuance",
+      });
+    }
+    if (payment.classification === PaymentClassification.EXCLUDED) {
+      throw new UnprocessableEntityException({
+        code: ApiErrorCode.PAYMENT_EXCLUDED,
+        message: "Payment is excluded from proof issuance",
+      });
+    }
+
+    const senderHidden = input.discloseSender !== true;
+    const amountHidden = input.discloseAmount !== true;
+    const amount = amountHidden
+      ? undefined
+      : this.revealPaymentAmount(payment.amountEncrypted);
+    const now = new Date();
+    const expiresAt = new Date(
+      now.getTime() +
+        (input.expiresInDays ?? DEFAULT_EXPIRY_DAYS) * 24 * 60 * 60 * 1000,
+    );
+    const proofId = randomUUID();
+    const paymentReferenceHash = `sha256:${sha256(payment.operationId)}`;
+    const credential = this.buildPaymentReceiptCredential({
+      id: proofId,
+      walletHash: user.walletHash,
+      assetCode: payment.assetCode,
+      assetIssuer: payment.assetIssuer,
+      occurredAt: payment.occurredAt,
+      paymentReferenceHash,
+      senderHidden,
+      amountHidden,
+      sourceAddress: senderHidden ? undefined : payment.sourceAddress,
+      amount,
+      issuedAt: now,
+      expiresAt,
+    });
+    const credentialHash = `sha256:${sha256(canonicalize(credential))}`;
+    const commitment = `sha256:${sha256(credentialHash)}`;
+
+    const proof = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.proof.create({
+        data: {
+          id: proofId,
+          userId: user.id,
+          proofType: ProofType.PAYMENT_RECEIPT,
+          schemaVersion: PAYMENT_RECEIPT_SCHEMA_VERSION,
+          status: ProofStatus.ACTIVE,
+          network: this.stellarNetwork,
+          assetCode: payment.assetCode,
+          assetIssuer: payment.assetIssuer,
+          periodStart: payment.occurredAt,
+          periodEnd: payment.occurredAt,
+          expiresAt,
+          createdAt: now,
+          credentialHash,
+          commitment,
+          claim: {
+            create: {
+              operator: "receipt",
+              thresholdEncrypted: amountHidden
+                ? null
+                : payment.amountEncrypted,
+              result: true,
+              disclosurePolicy: {
+                senderHidden,
+                amountHidden,
+                paymentReferenceHash,
+                occurredAt: payment.occurredAt.toISOString(),
+                ...(senderHidden
+                  ? undefined
+                  : { sourceAddress: payment.sourceAddress }),
+              },
+            },
+          },
+        },
+        include: { claim: true },
+      });
+
+      if (this.anchoringEnabled) {
+        await tx.anchoringIntent.create({
+          data: {
+            proofId: created.id,
+            operation: AnchoringOperation.REGISTER,
+            status: AnchoringStatus.PENDING,
+          },
+        });
+      }
+
+      return created;
+    });
+
+    const anchoringResult = this.anchoringEnabled
+      ? { anchored: false as const, reason: "pending" as const }
+      : { anchored: false as const, reason: "disabled" as const };
+
+    return {
+      proofId: proof.id,
+      status: proof.status,
+      verificationUrl: `/api/v1/proofs/${proof.id}/verify`,
+      credential: this.signCredential(credential),
+      anchoring: anchoringResult,
+    };
+  }
+
+  async listProofs(userId: string, input: ListProofsDto) {
+    const issuedFrom = input.issuedFrom
+      ? new Date(input.issuedFrom)
+      : undefined;
+    const issuedTo = input.issuedTo ? new Date(input.issuedTo) : undefined;
+    if (issuedFrom && issuedTo && issuedFrom > issuedTo) {
+      throw new BadRequestException("issuedFrom must be before issuedTo");
+    }
+
+    if (input.cursor) {
+      const cursor = await this.prisma.proof.findFirst({
+        where: { id: input.cursor, userId },
+        select: { id: true },
+      });
+      if (!cursor) {
+        throw new BadRequestException("Invalid proof cursor");
+      }
+    }
+
+    const limit = input.limit ?? 20;
+    const where: Prisma.ProofWhereInput = {
+      userId,
+      proofType: input.type,
+      status: input.status,
+      assetCode: input.assetCode,
+      createdAt:
+        issuedFrom || issuedTo ? { gte: issuedFrom, lte: issuedTo } : undefined,
+    };
+    const proofs = await this.prisma.proof.findMany({
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: limit + 1,
+      ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : undefined),
+    });
+    const hasMore = proofs.length > limit;
+    const page = hasMore ? proofs.slice(0, limit) : proofs;
+
+    return {
+      data: page.map((proof) => this.toHistoryItem(proof)),
+      pageInfo: {
+        hasMore,
+        nextCursor: hasMore ? (page.at(-1)?.id ?? null) : null,
+      },
+    };
+  }
+
+  async getProofDetail(user: AuthenticatedUser, proofId: string) {
+    const proof = await this.prisma.proof.findFirst({
+      where:
+        user.role === "ADMIN"
+          ? { id: proofId }
+          : { id: proofId, userId: user.id },
+      include: { claim: true },
+    });
+
+    if (!proof) {
+      throw new NotFoundException("Proof not found");
+    }
+
+    return {
+      ...this.toHistoryItem(proof),
+      anchoring: await this.proofAnchoringDetail(proof),
+      claim: this.claimSummary(proof.claim),
+    };
   }
 
   async createMinimumIncomeProof(
@@ -136,7 +370,9 @@ export class ProofsService {
     });
 
     if (payments.length !== selectedPaymentIds.length) {
-      throw new BadRequestException("One or more selected payments are invalid");
+      throw new BadRequestException(
+        "One or more selected payments are invalid",
+      );
     }
 
     for (const payment of payments) {
@@ -166,7 +402,8 @@ export class ProofsService {
     }
 
     const total = payments.reduce(
-      (sum, payment) => sum + this.revealProtectedAmount(payment.amountEncrypted),
+      (sum, payment) =>
+        sum + this.revealProtectedAmount(payment.amountEncrypted),
       0n,
     );
     const threshold = this.parseAmount(input.thresholdAmount);
@@ -196,40 +433,59 @@ export class ProofsService {
       issuedAt: now,
       expiresAt,
     });
-    const credentialHash = `sha256:${sha256(this.canonicalize(draftCredential))}`;
+    const credentialHash = `sha256:${sha256(canonicalize(draftCredential))}`;
+    const commitment = `sha256:${sha256(credentialHash)}`;
 
-    const proof = await this.prisma.proof.create({
-      data: {
-        id: proofId,
-        userId: user.id,
-        proofType: ProofType.MINIMUM_INCOME,
-        schemaVersion: SCHEMA_VERSION,
-        status: ProofStatus.ACTIVE,
-        network: this.stellarNetwork,
-        assetCode: input.assetCode,
-        assetIssuer: input.assetIssuer ?? null,
-        periodStart,
-        periodEnd,
-        expiresAt,
-        createdAt: now,
-        credentialHash,
-        commitment: `sha256:${sha256(credentialHash)}`,
-        claim: {
-          create: {
-            operator: "gte",
-            thresholdEncrypted: this.protectAmount(input.thresholdAmount),
-            result: true,
-            disclosurePolicy: {
-              exactIncomeHidden: true,
-              sourceTransactionsHidden: true,
-              qualifyingPaymentCount: payments.length,
+    // Write Proof + ProofClaim + AnchoringIntent in a single transaction.
+    // The intent is enqueued here (PENDING) even before any external call so
+    // that a crash after this point is recoverable by the worker.
+    const proof = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.proof.create({
+        data: {
+          id: proofId,
+          userId: user.id,
+          proofType: ProofType.MINIMUM_INCOME,
+          schemaVersion: SCHEMA_VERSION,
+          status: ProofStatus.ACTIVE,
+          network: this.stellarNetwork,
+          assetCode: input.assetCode,
+          assetIssuer: input.assetIssuer ?? null,
+          periodStart,
+          periodEnd,
+          expiresAt,
+          createdAt: now,
+          credentialHash,
+          commitment,
+          claim: {
+            create: {
+              operator: "gte",
+              thresholdEncrypted: this.protectAmount(input.thresholdAmount),
+              result: true,
+              disclosurePolicy: {
+                exactIncomeHidden: true,
+                sourceTransactionsHidden: true,
+                qualifyingPaymentCount: payments.length,
+              },
             },
           },
         },
-      },
-      include: {
-        claim: true,
-      },
+        include: {
+          claim: true,
+        },
+      });
+
+      // Only enqueue an anchoring intent when anchoring is configured.
+      if (this.anchoringEnabled) {
+        await tx.anchoringIntent.create({
+          data: {
+            proofId: created.id,
+            operation: AnchoringOperation.REGISTER,
+            status: AnchoringStatus.PENDING,
+          },
+        });
+      }
+
+      return created;
     });
 
     const credential = this.buildCredential({
@@ -244,32 +500,19 @@ export class ProofsService {
       issuedAt: proof.createdAt,
       expiresAt: proof.expiresAt,
     });
-    const anchorResult = await this.contractAnchoringService?.anchorProof({
-      proofId: proof.id,
-      commitment: proof.commitment ?? credentialHash,
-      expiresAt: proof.expiresAt,
-    });
 
-    if (anchorResult?.anchored) {
-      await this.prisma.proof.update({
-        where: {
-          id: proof.id,
-        },
-        data: {
-          contractTransactionHash: anchorResult.transactionHash,
-        },
-      });
-    }
+    // Anchoring is now async (handled by AnchoringWorkerService).
+    // Return a "pending" anchoring status so callers know to poll verify later.
+    const anchoringResult = this.anchoringEnabled
+      ? { anchored: false as const, reason: "pending" as const }
+      : { anchored: false as const, reason: "disabled" as const };
 
     return {
       proofId: proof.id,
       status: proof.status,
       verificationUrl: `/api/v1/proofs/${proof.id}/verify`,
       credential: this.signCredential(credential),
-      anchoring: anchorResult ?? {
-        anchored: false,
-        reason: "disabled",
-      },
+      anchoring: anchoringResult,
     };
   }
 
@@ -279,31 +522,23 @@ export class ProofsService {
   ) {
     const periodStart = new Date(input.periodStart);
     const periodEnd = new Date(input.periodEnd);
-
     if (periodStart >= periodEnd) {
       throw new BadRequestException("periodStart must be before periodEnd");
     }
 
-    // Build the interval boundaries up-front so we can validate them before
-    // touching the database.
-    const intervals = this.buildIntervals(
+    const intervals = this.buildRecurringIntervals(
       periodStart,
       periodEnd,
       input.intervalUnit,
       input.intervalCount,
     );
-
     const selectedPaymentIds = [...new Set(input.selectedPaymentIds)];
     const payments = await this.prisma.payment.findMany({
-      where: {
-        id: { in: selectedPaymentIds },
-        userId: user.id,
-      },
+      where: { id: { in: selectedPaymentIds }, userId: user.id },
       select: {
         id: true,
         assetCode: true,
         assetIssuer: true,
-        amountEncrypted: true,
         classification: true,
         isEligible: true,
         occurredAt: true,
@@ -311,7 +546,9 @@ export class ProofsService {
     });
 
     if (payments.length !== selectedPaymentIds.length) {
-      throw new BadRequestException("One or more selected payments are invalid");
+      throw new BadRequestException(
+        "One or more selected payments are invalid",
+      );
     }
 
     for (const payment of payments) {
@@ -323,7 +560,6 @@ export class ProofsService {
           "Selected payments must be eligible income payments",
         );
       }
-
       if (
         payment.assetCode !== input.assetCode ||
         (payment.assetIssuer ?? null) !== (input.assetIssuer ?? null)
@@ -332,7 +568,6 @@ export class ProofsService {
           "Selected payments must use the requested asset",
         );
       }
-
       if (payment.occurredAt < periodStart || payment.occurredAt > periodEnd) {
         throw new BadRequestException(
           "Selected payments must fall inside the requested period",
@@ -340,19 +575,16 @@ export class ProofsService {
       }
     }
 
-    // Evaluate cadence: every required interval must contain at least one
-    // qualifying payment. A gap in any interval is an unsatisfied result —
-    // we must never issue a credential in that case.
-    const unsatisfiedIntervals = intervals.filter(
-      ([iStart, iEnd]) =>
+    const missingIntervals = intervals.filter(
+      ([start, end]) =>
         !payments.some(
-          (p) => p.occurredAt >= iStart && p.occurredAt <= iEnd,
+          (payment) =>
+            payment.occurredAt >= start && payment.occurredAt <= end,
         ),
     );
-
-    if (unsatisfiedIntervals.length > 0) {
+    if (missingIntervals.length > 0) {
       throw new BadRequestException(
-        `Recurring income proof unsatisfied: ${unsatisfiedIntervals.length} of ${intervals.length} interval(s) contain no qualifying payment`,
+        `Recurring income proof unsatisfied: ${missingIntervals.length} of ${intervals.length} interval(s) contain no qualifying payment`,
       );
     }
 
@@ -361,9 +593,8 @@ export class ProofsService {
       now.getTime() +
         (input.expiresInDays ?? DEFAULT_EXPIRY_DAYS) * 24 * 60 * 60 * 1000,
     );
-
-    const cadence = `${input.intervalUnit}:${input.intervalCount}`;
     const proofId = randomUUID();
+    const cadence = `${input.intervalUnit}:${input.intervalCount}`;
     const draftCredential = this.buildRecurringIncomeCredential({
       id: proofId,
       walletHash: user.walletHash,
@@ -378,40 +609,54 @@ export class ProofsService {
       issuedAt: now,
       expiresAt,
     });
-    const credentialHash = `sha256:${sha256(this.canonicalize(draftCredential))}`;
+    const credentialHash = `sha256:${sha256(canonicalize(draftCredential))}`;
+    const commitment = `sha256:${sha256(credentialHash)}`;
 
-    const proof = await this.prisma.proof.create({
-      data: {
-        id: proofId,
-        userId: user.id,
-        proofType: ProofType.RECURRING_INCOME,
-        schemaVersion: SCHEMA_VERSION_RECURRING,
-        status: ProofStatus.ACTIVE,
-        network: this.stellarNetwork,
-        assetCode: input.assetCode,
-        assetIssuer: input.assetIssuer ?? null,
-        periodStart,
-        periodEnd,
-        expiresAt,
-        createdAt: now,
-        credentialHash,
-        commitment: `sha256:${sha256(credentialHash)}`,
-        claim: {
-          create: {
-            operator: "recurring",
-            frequency: cadence,
-            result: true,
-            disclosurePolicy: {
-              exactIncomeHidden: true,
-              sourceTransactionsHidden: true,
-              qualifyingPaymentCount: payments.length,
-              intervalUnit: input.intervalUnit,
-              intervalCount: input.intervalCount,
+    const proof = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.proof.create({
+        data: {
+          id: proofId,
+          userId: user.id,
+          proofType: ProofType.RECURRING_INCOME,
+          schemaVersion: RECURRING_INCOME_SCHEMA_VERSION,
+          status: ProofStatus.ACTIVE,
+          network: this.stellarNetwork,
+          assetCode: input.assetCode,
+          assetIssuer: input.assetIssuer ?? null,
+          periodStart,
+          periodEnd,
+          expiresAt,
+          createdAt: now,
+          credentialHash,
+          commitment,
+          claim: {
+            create: {
+              operator: "recurring",
+              frequency: cadence,
+              result: true,
+              disclosurePolicy: {
+                exactIncomeHidden: true,
+                sourceTransactionsHidden: true,
+                qualifyingPaymentCount: payments.length,
+                intervalUnit: input.intervalUnit,
+                intervalCount: input.intervalCount,
+              },
             },
           },
         },
-      },
-      include: { claim: true },
+        include: { claim: true },
+      });
+
+      if (this.anchoringEnabled) {
+        await tx.anchoringIntent.create({
+          data: {
+            proofId: created.id,
+            operation: AnchoringOperation.REGISTER,
+            status: AnchoringStatus.PENDING,
+          },
+        });
+      }
+      return created;
     });
 
     const credential = this.buildRecurringIncomeCredential({
@@ -429,25 +674,14 @@ export class ProofsService {
       expiresAt: proof.expiresAt,
     });
 
-    const anchorResult = await this.contractAnchoringService?.anchorProof({
-      proofId: proof.id,
-      commitment: proof.commitment ?? credentialHash,
-      expiresAt: proof.expiresAt,
-    });
-
-    if (anchorResult?.anchored) {
-      await this.prisma.proof.update({
-        where: { id: proof.id },
-        data: { contractTransactionHash: anchorResult.transactionHash },
-      });
-    }
-
     return {
       proofId: proof.id,
       status: proof.status,
       verificationUrl: `/api/v1/proofs/${proof.id}/verify`,
-      credential: this.signRecurringIncomeCredential(credential),
-      anchoring: anchorResult ?? { anchored: false, reason: "disabled" },
+      credential: this.signCredential(credential),
+      anchoring: this.anchoringEnabled
+        ? { anchored: false as const, reason: "pending" as const }
+        : { anchored: false as const, reason: "disabled" as const },
     };
   }
 
@@ -472,31 +706,44 @@ export class ProofsService {
       throw new ForbiddenException("Proof does not belong to this user");
     }
 
-    const contractRevocation = proof.contractTransactionHash
-      ? await this.contractAnchoringService?.revokeProof(proof.id)
-      : undefined;
+    // Write local revocation + optional REVOKE anchoring intent atomically.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.proof.update({
+        where: { id: proof.id },
+        data: {
+          status: ProofStatus.REVOKED,
+          revokedAt: new Date(),
+        },
+        select: {
+          id: true,
+          status: true,
+          revokedAt: true,
+        },
+      });
 
-    const updated = await this.prisma.proof.update({
-      where: {
-        id: proof.id,
-      },
-      data: {
-        status: ProofStatus.REVOKED,
-        revokedAt: new Date(),
-      },
-      select: {
-        id: true,
-        status: true,
-        revokedAt: true,
-      },
+      // Only enqueue a REVOKE intent if the proof was previously anchored
+      // on-chain — no on-chain registration means nothing to revoke.
+      if (this.anchoringEnabled && proof.contractTransactionHash) {
+        await tx.anchoringIntent.create({
+          data: {
+            proofId: proof.id,
+            operation: AnchoringOperation.REVOKE,
+            status: AnchoringStatus.PENDING,
+          },
+        });
+      }
+
+      return result;
     });
+
+    const anchoringResult =
+      this.anchoringEnabled && proof.contractTransactionHash
+        ? { anchored: false as const, reason: "pending" as const }
+        : { anchored: false as const, reason: "disabled" as const };
 
     return {
       ...updated,
-      anchoring: contractRevocation ?? {
-        anchored: false,
-        reason: "disabled",
-      },
+      anchoring: anchoringResult,
     };
   }
 
@@ -519,17 +766,15 @@ export class ProofsService {
       // Fail-open policy: record event asynchronously
       // If event recording fails, the verification response is still returned.
       // This ensures verification availability over audit completeness.
-      this.verificationEventService.recordEvent(
-        VerificationOutcome.UNKNOWN,
-        proofId,
-        {
+      this.verificationEventService
+        .recordEvent(VerificationOutcome.UNKNOWN, proofId, {
           outcome: "UNKNOWN",
           timestamp: new Date(),
-        },
-      ).catch(() => {
-        // Error already logged by the service
-        // Verification continues unblocked
-      });
+        })
+        .catch(() => {
+          // Error already logged by the service
+          // Verification continues unblocked
+        });
 
       return {
         result: VerificationResult.UNKNOWN_PROOF,
@@ -537,25 +782,48 @@ export class ProofsService {
       };
     }
 
-    const { credential: builtCredential, signedCredential } = this.rebuildAndSign(
-      proof as {
-        id: string;
-        proofType: ProofType;
-        assetCode: string;
-        assetIssuer: string | null;
-        periodStart: Date | null;
-        periodEnd: Date | null;
-        createdAt: Date;
-        expiresAt: Date;
-        user: { walletHash: string };
-        claim: {
-          thresholdEncrypted: string | null;
-          frequency: string | null;
-          disclosurePolicy: Prisma.JsonValue;
-        };
-      },
-    );
-    const expectedHash = `sha256:${sha256(this.canonicalize(builtCredential))}`;
+    const policy = this.jsonPolicy(proof.claim.disclosurePolicy);
+    const cadence = this.revealCadence(proof.claim.frequency);
+    const credential =
+      proof.proofType === ProofType.RECURRING_INCOME
+        ? this.buildRecurringIncomeCredential({
+            id: proof.id,
+            walletHash: proof.user.walletHash,
+            cadence: proof.claim.frequency ?? "invalid",
+            intervalUnit: cadence?.intervalUnit ?? "month",
+            intervalCount: cadence?.intervalCount ?? 0,
+            assetCode: proof.assetCode,
+            assetIssuer: proof.assetIssuer,
+            periodStart: proof.periodStart ?? proof.createdAt,
+            periodEnd: proof.periodEnd ?? proof.createdAt,
+            qualifyingPaymentCount:
+              typeof policy["qualifyingPaymentCount"] === "number"
+                ? policy["qualifyingPaymentCount"]
+                : 0,
+            issuedAt: proof.createdAt,
+            expiresAt: proof.expiresAt,
+          })
+        : proof.proofType === ProofType.PAYMENT_RECEIPT
+          ? this.rebuildPaymentReceiptCredential({
+              ...proof,
+              claim: proof.claim!,
+            })
+          : this.buildCredential({
+            id: proof.id,
+            walletHash: proof.user.walletHash,
+            thresholdAmount: this.revealThreshold(
+              proof.claim.thresholdEncrypted,
+            ),
+            assetCode: proof.assetCode,
+            assetIssuer: proof.assetIssuer,
+            periodStart: proof.periodStart ?? proof.createdAt,
+            periodEnd: proof.periodEnd ?? proof.createdAt,
+            qualifyingPaymentCount: this.qualifyingPaymentCount(proof.claim),
+            issuedAt: proof.createdAt,
+            expiresAt: proof.expiresAt,
+          });
+    const signedCredential = this.signCredential(credential);
+    const expectedHash = `sha256:${sha256(canonicalize(credential))}`;
 
     let result: VerificationResult = VerificationResult.VALID;
     if (proof.credentialHash !== expectedHash) {
@@ -566,6 +834,18 @@ export class ProofsService {
       result = VerificationResult.EXPIRED;
     } else if (proof.status !== ProofStatus.ACTIVE) {
       result = VerificationResult.INVALID_SIGNATURE;
+    }
+
+    // If required anchoring is enabled and this proof has not yet been
+    // confirmed on-chain, return UNVERIFIED_ISSUER to signal that the proof
+    // is not yet verifiable via the contract. Optional anchoring (or no
+    // anchoring at all) does not block verification.
+    if (
+      result === VerificationResult.VALID &&
+      this.anchoringRequired &&
+      !proof.contractTransactionHash
+    ) {
+      result = VerificationResult.UNVERIFIED_ISSUER;
     }
 
     const contractStatus = proof.contractTransactionHash
@@ -587,13 +867,15 @@ export class ProofsService {
     // If event recording fails, the verification response is still returned.
     // This ensures verification availability over audit completeness.
     // Event recording errors are caught and logged by the service.
-    this.verificationEventService.recordEvent(outcome, proof.id, {
-      outcome: outcome,
-      timestamp: new Date(),
-    }).catch(() => {
-      // Error already logged by the service
-      // Verification continues unblocked
-    });
+    this.verificationEventService
+      .recordEvent(outcome, proof.id, {
+        outcome: outcome,
+        timestamp: new Date(),
+      })
+      .catch(() => {
+        // Error already logged by the service
+        // Verification continues unblocked
+      });
 
     await this.prisma.verificationEvent.create({
       data: {
@@ -620,193 +902,6 @@ export class ProofsService {
         },
       },
     };
-  }
-
-  private buildRecurringIncomeCredential(input: {
-    id: string;
-    walletHash: string;
-    cadence: string;
-    intervalUnit: IntervalUnit;
-    intervalCount: number;
-    assetCode: string;
-    assetIssuer: string | null;
-    periodStart: Date;
-    periodEnd: Date;
-    qualifyingPaymentCount: number;
-    issuedAt: Date;
-    expiresAt: Date;
-  }): RecurringIncomeCredential {
-    return {
-      id: input.id,
-      type: "EarnProofRecurringIncomeCredential",
-      schemaVersion: SCHEMA_VERSION_RECURRING,
-      issuer: "earnproof-backend",
-      subject: { walletHash: input.walletHash },
-      claim: {
-        cadence: input.cadence,
-        intervalUnit: input.intervalUnit,
-        intervalCount: input.intervalCount,
-        assetCode: input.assetCode,
-        assetIssuer: input.assetIssuer,
-        periodStart: input.periodStart.toISOString(),
-        periodEnd: input.periodEnd.toISOString(),
-        qualifyingPaymentCount: input.qualifyingPaymentCount,
-      },
-      privacy: {
-        exactIncomeHidden: true,
-        sourceTransactionsHidden: true,
-      },
-      issuedAt: input.issuedAt.toISOString(),
-      expiresAt: input.expiresAt.toISOString(),
-    };
-  }
-
-  private signRecurringIncomeCredential(credential: RecurringIncomeCredential) {
-    const canonicalPayload = this.canonicalize(credential);
-    return {
-      ...credential,
-      proof: {
-        type: "HMAC-SHA256",
-        credentialHash: `sha256:${sha256(canonicalPayload)}`,
-        signature: `hmac-sha256:${createHmac("sha256", this.signingSecret)
-          .update(canonicalPayload)
-          .digest("base64url")}`,
-      },
-    };
-  }
-
-  /**
-   * Rebuilds the unsigned credential from stored DB values and signs it.
-   * Dispatches on proofType so the hash produced here matches the one
-   * computed at issuance time.
-   */
-  private rebuildAndSign(proof: {
-    id: string;
-    proofType: ProofType;
-    assetCode: string;
-    assetIssuer: string | null;
-    periodStart: Date | null;
-    periodEnd: Date | null;
-    createdAt: Date;
-    expiresAt: Date;
-    user: { walletHash: string };
-    claim: {
-      thresholdEncrypted: string | null;
-      frequency: string | null;
-      disclosurePolicy: Prisma.JsonValue;
-    };
-  }) {
-    if (proof.proofType === ProofType.RECURRING_INCOME) {
-      const { intervalUnit, intervalCount } = this.revealCadence(
-        proof.claim.frequency,
-      );
-      const cadence = proof.claim.frequency ?? `${intervalUnit}:${intervalCount}`;
-      const credential = this.buildRecurringIncomeCredential({
-        id: proof.id,
-        walletHash: proof.user.walletHash,
-        cadence,
-        intervalUnit,
-        intervalCount,
-        assetCode: proof.assetCode,
-        assetIssuer: proof.assetIssuer,
-        periodStart: proof.periodStart ?? proof.createdAt,
-        periodEnd: proof.periodEnd ?? proof.createdAt,
-        qualifyingPaymentCount: this.qualifyingPaymentCount(proof.claim),
-        issuedAt: proof.createdAt,
-        expiresAt: proof.expiresAt,
-      });
-      return {
-        credential,
-        signedCredential: this.signRecurringIncomeCredential(credential),
-      };
-    }
-
-    // Default: minimum-income (and any other future type that follows the same shape)
-    const credential = this.buildCredential({
-      id: proof.id,
-      walletHash: proof.user.walletHash,
-      thresholdAmount: this.revealThreshold(proof.claim.thresholdEncrypted),
-      assetCode: proof.assetCode,
-      assetIssuer: proof.assetIssuer,
-      periodStart: proof.periodStart ?? proof.createdAt,
-      periodEnd: proof.periodEnd ?? proof.createdAt,
-      qualifyingPaymentCount: this.qualifyingPaymentCount(proof.claim),
-      issuedAt: proof.createdAt,
-      expiresAt: proof.expiresAt,
-    });
-    return {
-      credential,
-      signedCredential: this.signCredential(credential),
-    };
-  }
-
-  /**
-   * Splits [periodStart, periodEnd] into exactly `intervalCount` sub-intervals
-   * of the given unit. Each interval is [start, end] inclusive.
-   *
-   * "month" boundaries are calendar-month-aware: interval i starts at
-   * periodStart + i months. "week" is 7 days. "day" is 1 day.
-   */
-  private buildIntervals(
-    periodStart: Date,
-    periodEnd: Date,
-    unit: IntervalUnit,
-    count: number,
-  ): [Date, Date][] {
-    const intervals: [Date, Date][] = [];
-
-    for (let i = 0; i < count; i++) {
-      const iStart = this.addUnit(periodStart, unit, i);
-      // The interval ends 1 ms before the next interval starts (exclusive upper)
-      // so that a payment exactly on the boundary is in exactly one interval.
-      const iEnd =
-        i < count - 1
-          ? new Date(this.addUnit(periodStart, unit, i + 1).getTime() - 1)
-          : periodEnd;
-
-      intervals.push([iStart, iEnd]);
-    }
-
-    return intervals;
-  }
-
-  private addUnit(base: Date, unit: IntervalUnit, n: number): Date {
-    if (n === 0) return new Date(base);
-
-    const d = new Date(base);
-    switch (unit) {
-      case "day":
-        d.setUTCDate(d.getUTCDate() + n);
-        break;
-      case "week":
-        d.setUTCDate(d.getUTCDate() + n * 7);
-        break;
-      case "month":
-        d.setUTCMonth(d.getUTCMonth() + n);
-        break;
-    }
-    return d;
-  }
-
-  /**
-   * Parses a cadence string stored as "intervalUnit:intervalCount" back into
-   * its components. Defaults to "month" + 1 if the stored value is malformed.
-   */
-  private revealCadence(frequency: string | null): {
-    intervalUnit: IntervalUnit;
-    intervalCount: number;
-  } {
-    if (frequency) {
-      const parts = frequency.split(":");
-      if (parts.length === 2) {
-        const unit = parts[0] as IntervalUnit;
-        const count = parseInt(parts[1], 10);
-        if (["day", "week", "month"].includes(unit) && !isNaN(count)) {
-          return { intervalUnit: unit, intervalCount: count };
-        }
-      }
-    }
-    return { intervalUnit: "month", intervalCount: 1 };
   }
 
   private buildCredential(input: {
@@ -847,8 +942,187 @@ export class ProofsService {
     };
   }
 
-  private signCredential(credential: MinimumIncomeCredential) {
-    const canonicalPayload = this.canonicalize(credential);
+  private buildPaymentReceiptCredential(input: {
+    id: string;
+    walletHash: string;
+    assetCode: string;
+    assetIssuer: string | null;
+    occurredAt: Date;
+    paymentReferenceHash: string;
+    senderHidden: boolean;
+    amountHidden: boolean;
+    sourceAddress?: string;
+    amount?: string;
+    issuedAt: Date;
+    expiresAt: Date;
+  }): PaymentReceiptCredential {
+    return {
+      id: input.id,
+      type: "EarnProofPaymentReceiptCredential",
+      schemaVersion: PAYMENT_RECEIPT_SCHEMA_VERSION,
+      issuer: "earnproof-backend",
+      subject: { walletHash: input.walletHash },
+      claim: {
+        assetCode: input.assetCode,
+        assetIssuer: input.assetIssuer,
+        occurredAt: input.occurredAt.toISOString(),
+        paymentReferenceHash: input.paymentReferenceHash,
+        ...(input.senderHidden
+          ? undefined
+          : { sourceAddress: input.sourceAddress }),
+        ...(input.amountHidden ? undefined : { amount: input.amount }),
+      },
+      privacy: {
+        senderHidden: input.senderHidden,
+        amountHidden: input.amountHidden,
+      },
+      issuedAt: input.issuedAt.toISOString(),
+      expiresAt: input.expiresAt.toISOString(),
+    };
+  }
+
+  private buildRecurringIncomeCredential(input: {
+    id: string;
+    walletHash: string;
+    cadence: string;
+    intervalUnit: IntervalUnit;
+    intervalCount: number;
+    assetCode: string;
+    assetIssuer: string | null;
+    periodStart: Date;
+    periodEnd: Date;
+    qualifyingPaymentCount: number;
+    issuedAt: Date;
+    expiresAt: Date;
+  }): RecurringIncomeCredential {
+    return {
+      id: input.id,
+      type: "EarnProofRecurringIncomeCredential",
+      schemaVersion: RECURRING_INCOME_SCHEMA_VERSION,
+      issuer: "earnproof-backend",
+      subject: { walletHash: input.walletHash },
+      claim: {
+        cadence: input.cadence,
+        intervalUnit: input.intervalUnit,
+        intervalCount: input.intervalCount,
+        assetCode: input.assetCode,
+        assetIssuer: input.assetIssuer,
+        periodStart: input.periodStart.toISOString(),
+        periodEnd: input.periodEnd.toISOString(),
+        qualifyingPaymentCount: input.qualifyingPaymentCount,
+      },
+      privacy: {
+        exactIncomeHidden: true,
+        sourceTransactionsHidden: true,
+      },
+      issuedAt: input.issuedAt.toISOString(),
+      expiresAt: input.expiresAt.toISOString(),
+    };
+  }
+
+  private buildRecurringIntervals(
+    periodStart: Date,
+    periodEnd: Date,
+    unit: IntervalUnit,
+    count: number,
+  ): Array<[Date, Date]> {
+    const finalIntervalStart = this.addIntervalUnit(
+      periodStart,
+      unit,
+      count - 1,
+    );
+    const cadenceEnd = this.addIntervalUnit(periodStart, unit, count);
+    if (periodEnd < finalIntervalStart || periodEnd >= cadenceEnd) {
+      throw new BadRequestException(
+        "The overall period must contain exactly the requested number of cadence intervals",
+      );
+    }
+
+    return Array.from({ length: count }, (_, index) => {
+      const start = this.addIntervalUnit(periodStart, unit, index);
+      const nextStart = this.addIntervalUnit(periodStart, unit, index + 1);
+      const naturalEnd = new Date(nextStart.getTime() - 1);
+      return [start, naturalEnd < periodEnd ? naturalEnd : periodEnd];
+    });
+  }
+
+  private addIntervalUnit(date: Date, unit: IntervalUnit, amount: number) {
+    const result = new Date(date);
+    if (unit === "day") {
+      result.setUTCDate(result.getUTCDate() + amount);
+    } else if (unit === "week") {
+      result.setUTCDate(result.getUTCDate() + amount * 7);
+    } else {
+      result.setUTCMonth(result.getUTCMonth() + amount);
+    }
+    return result;
+  }
+
+  private revealCadence(frequency: string | null) {
+    const match = /^(day|week|month):([1-9]\d*)$/.exec(frequency ?? "");
+    if (!match) return null;
+
+    const intervalCount = Number(match[2]);
+    if (!Number.isSafeInteger(intervalCount) || intervalCount > 120) {
+      return null;
+    }
+    return {
+      intervalUnit: match[1] as IntervalUnit,
+      intervalCount,
+    };
+  }
+
+  private rebuildPaymentReceiptCredential(proof: {
+    id: string;
+    assetCode: string;
+    assetIssuer: string | null;
+    createdAt: Date;
+    expiresAt: Date;
+    periodStart: Date | null;
+    user: { walletHash: string };
+    claim: {
+      thresholdEncrypted: string | null;
+      disclosurePolicy: Prisma.JsonValue;
+    };
+  }) {
+    const policy = this.jsonPolicy(proof.claim.disclosurePolicy);
+    const senderHidden = policy["senderHidden"] !== false;
+    const amountHidden = policy["amountHidden"] !== false;
+    const occurredAtValue = policy["occurredAt"];
+    const occurredAt =
+      typeof occurredAtValue === "string" &&
+      !Number.isNaN(new Date(occurredAtValue).getTime())
+        ? new Date(occurredAtValue)
+        : (proof.periodStart ?? proof.createdAt);
+
+    return this.buildPaymentReceiptCredential({
+      id: proof.id,
+      walletHash: proof.user.walletHash,
+      assetCode: proof.assetCode,
+      assetIssuer: proof.assetIssuer,
+      occurredAt,
+      paymentReferenceHash:
+        typeof policy["paymentReferenceHash"] === "string"
+          ? policy["paymentReferenceHash"]
+          : "",
+      senderHidden,
+      amountHidden,
+      sourceAddress:
+        typeof policy["sourceAddress"] === "string"
+          ? policy["sourceAddress"]
+          : undefined,
+      amount: amountHidden
+        ? undefined
+        : this.revealPaymentAmountForVerification(
+            proof.claim.thresholdEncrypted,
+          ),
+      issuedAt: proof.createdAt,
+      expiresAt: proof.expiresAt,
+    });
+  }
+
+  private signCredential<T extends EarnProofCredential>(credential: T) {
+    const canonicalPayload = canonicalize(credential);
     return {
       ...credential,
       proof: {
@@ -859,28 +1133,6 @@ export class ProofsService {
           .digest("base64url")}`,
       },
     };
-  }
-
-  private canonicalize(value: unknown): string {
-    return JSON.stringify(this.sortObject(value));
-  }
-
-  private sortObject(value: unknown): unknown {
-    if (Array.isArray(value)) {
-      return value.map((item) => this.sortObject(item));
-    }
-
-    if (value && typeof value === "object") {
-      const record = value as Record<string, unknown>;
-      return Object.keys(record)
-        .sort()
-        .reduce<Record<string, unknown>>((sorted, key) => {
-          sorted[key] = this.sortObject(record[key]);
-          return sorted;
-        }, {});
-    }
-
-    return value;
   }
 
   private revealProtectedAmount(amountEncrypted: string | null) {
@@ -895,6 +1147,39 @@ export class ProofsService {
     } catch {
       throw new BadRequestException("Selected payment amount is unavailable");
     }
+  }
+
+  private revealPaymentAmount(amountEncrypted: string | null) {
+    if (!amountEncrypted) {
+      throw new UnprocessableEntityException({
+        code: ApiErrorCode.PAYMENT_NOT_ELIGIBLE,
+        message: "Payment amount is unavailable for disclosure",
+      });
+    }
+    try {
+      return decryptProtectedAmount(amountEncrypted, this.paymentEncryptionKey);
+    } catch {
+      throw new UnprocessableEntityException({
+        code: ApiErrorCode.PAYMENT_NOT_ELIGIBLE,
+        message: "Payment amount is unavailable for disclosure",
+      });
+    }
+  }
+
+  private revealPaymentAmountForVerification(amountEncrypted: string | null) {
+    try {
+      return amountEncrypted
+        ? decryptProtectedAmount(amountEncrypted, this.paymentEncryptionKey)
+        : "";
+    } catch {
+      return "";
+    }
+  }
+
+  private jsonPolicy(value: Prisma.JsonValue): Record<string, unknown> {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
   }
 
   private revealThreshold(thresholdEncrypted: string | null) {
@@ -918,7 +1203,9 @@ export class ProofsService {
     return BigInt(whole) * 10_000_000n + BigInt(paddedDecimal);
   }
 
-  private qualifyingPaymentCount(claim: { disclosurePolicy: Prisma.JsonValue }) {
+  private qualifyingPaymentCount(claim: {
+    disclosurePolicy: Prisma.JsonValue;
+  }) {
     const policy = claim.disclosurePolicy;
     if (
       policy &&
@@ -990,5 +1277,92 @@ export class ProofsService {
     }
 
     return this.verificationEventService.getAggregateStats(proofId);
+  }
+
+  private toHistoryItem(proof: Proof) {
+    const expired = proof.expiresAt <= new Date();
+    return {
+      id: proof.id,
+      type: proof.proofType,
+      schemaVersion: proof.schemaVersion,
+      localStatus: proof.status,
+      credentialValidity: this.credentialValidity(proof, expired),
+      expired,
+      asset: { code: proof.assetCode, issuer: proof.assetIssuer },
+      periodStart: proof.periodStart?.toISOString() ?? null,
+      periodEnd: proof.periodEnd?.toISOString() ?? null,
+      issuedAt: proof.createdAt.toISOString(),
+      expiresAt: proof.expiresAt.toISOString(),
+      revokedAt: proof.revokedAt?.toISOString() ?? null,
+      anchoring: {
+        anchored: Boolean(proof.contractTransactionHash),
+        status: proof.contractTransactionHash ? "recorded" : "not_anchored",
+        ...(proof.contractTransactionHash
+          ? { transactionHash: proof.contractTransactionHash }
+          : undefined),
+        checked: false,
+      },
+    };
+  }
+
+  private credentialValidity(proof: Proof, expired: boolean) {
+    if (proof.status === ProofStatus.REVOKED) return "revoked";
+    if (proof.status === ProofStatus.INVALID) return "invalid";
+    if (proof.status === ProofStatus.EXPIRED || expired) return "expired";
+    return "valid";
+  }
+
+  private claimSummary(claim: ProofClaim | null) {
+    if (!claim) return undefined;
+    const policy = claim.disclosurePolicy as Prisma.JsonObject;
+    const count = policy["qualifyingPaymentCount"];
+
+    return {
+      operator: claim.operator,
+      result: claim.result,
+      ...(typeof count === "number"
+        ? { qualifyingPaymentCount: count }
+        : undefined),
+    };
+  }
+
+  private async proofAnchoringDetail(proof: Proof) {
+    if (!proof.contractTransactionHash) {
+      return { anchored: false, status: "not_anchored", checked: false };
+    }
+
+    if (!this.contractAnchoringService) {
+      return {
+        anchored: true,
+        status: "recorded",
+        transactionHash: proof.contractTransactionHash,
+        checked: false,
+      };
+    }
+
+    try {
+      const contract = await this.contractAnchoringService.getProofStatus(
+        proof.id,
+      );
+      return {
+        anchored: true,
+        status: contract.checked
+          ? contract.revoked
+            ? "revoked"
+            : contract.valid
+              ? "valid"
+              : "invalid"
+          : "unavailable",
+        transactionHash: proof.contractTransactionHash,
+        checked: contract.checked,
+      };
+    } catch {
+      return {
+        anchored: true,
+        status: "unavailable",
+        transactionHash: proof.contractTransactionHash,
+        checked: false,
+      };
+    }
   }
 }
