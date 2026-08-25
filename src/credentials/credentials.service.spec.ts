@@ -98,7 +98,13 @@ describe("CredentialsService.verifyCredential", () => {
     });
     expect(prisma.proof.findUnique).toHaveBeenCalledWith({
       where: { credentialHash: hash },
-      select: { status: true, expiresAt: true, schemaVersion: true },
+      select: {
+        id: true,
+        status: true,
+        expiresAt: true,
+        schemaVersion: true,
+        contractTransactionHash: true,
+      },
     });
   });
 
@@ -133,6 +139,48 @@ describe("CredentialsService.verifyCredential", () => {
     const service = new CredentialsService(prisma as never, config as never);
     await expect(service.verifyCredential(tampered)).resolves.toEqual({
       result: "invalid_signature",
+    });
+  });
+
+  it("returns invalid_signature when the embedded credential hash is altered", async () => {
+    const signed = signCredential(buildCredentialBody());
+    signed.proof.credentialHash = `sha256:${"0".repeat(64)}`;
+
+    const service = new CredentialsService(
+      mockPrismaWith(null) as never,
+      config as never,
+    );
+    await expect(service.verifyCredential(signed)).resolves.toEqual({
+      result: "invalid_signature",
+    });
+  });
+
+  it("rejects unsigned extra fields instead of silently stripping them", async () => {
+    const signed = signCredential(buildCredentialBody()) as Record<
+      string,
+      unknown
+    >;
+    signed["injected"] = "not-signed";
+
+    const service = new CredentialsService(
+      mockPrismaWith(null) as never,
+      config as never,
+    );
+    await expect(service.verifyCredential(signed)).rejects.toThrow(
+      BadRequestException,
+    );
+  });
+
+  it("returns unsupported_key for an unknown signature scheme", async () => {
+    const signed = signCredential(buildCredentialBody());
+    signed.proof.type = "UNKNOWN";
+
+    const service = new CredentialsService(
+      mockPrismaWith(null) as never,
+      config as never,
+    );
+    await expect(service.verifyCredential(signed)).resolves.toEqual({
+      result: "unsupported_key",
     });
   });
 

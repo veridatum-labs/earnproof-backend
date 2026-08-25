@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  Optional,
+} from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { ProofStatus } from "@prisma/client";
 import { createHmac } from "crypto";
@@ -7,6 +12,7 @@ import { canonicalize } from "../common/crypto/canonicalize";
 import { sha256 } from "../common/crypto/hash";
 import { safeEqual } from "../common/crypto/timing-safe";
 import { PrismaService } from "../database/prisma.service";
+import { ContractAnchoringService } from "../proofs/contract-anchoring.service";
 
 const MAX_PAYLOAD_BYTES = 32 * 1024; // 32 KB
 const MAX_DEPTH = 5;
@@ -21,6 +27,7 @@ export type VerifyCredentialResult =
   | "valid"
   | "invalid_signature"
   | "unsupported_schema"
+  | "unsupported_key"
   | "unknown_anchor"
   | "revoked"
   | "expired"
@@ -38,10 +45,10 @@ const MinimumIncomeCredentialSchema = z.object({
   id: z.string().min(1),
   type: z.literal(SUPPORTED_TYPE),
   schemaVersion: z.literal(SUPPORTED_SCHEMA_VERSION),
-  issuer: z.string().min(1),
+  issuer: z.literal("earnproof-backend"),
   subject: z.object({
     walletHash: z.string().min(1),
-  }),
+  }).strict(),
   claim: z.object({
     operator: z.string().min(1),
     thresholdAmount: z.string().min(1),
@@ -50,20 +57,20 @@ const MinimumIncomeCredentialSchema = z.object({
     periodStart: z.string().min(1),
     periodEnd: z.string().min(1),
     qualifyingPaymentCount: z.number().int().nonnegative(),
-  }),
+  }).strict(),
   privacy: z.object({
     exactIncomeHidden: z.literal(true),
     sourceTransactionsHidden: z.literal(true),
-  }),
-  issuedAt: z.string().min(1),
-  expiresAt: z.string().min(1),
+  }).strict(),
+  issuedAt: z.string().datetime({ offset: true }),
+  expiresAt: z.string().datetime({ offset: true }),
   // The signature proof block appended when a credential is issued
   proof: z.object({
-    type: z.string().min(1),
+    type: z.literal("HMAC-SHA256"),
     credentialHash: z.string().min(1),
     signature: z.string().min(1),
-  }),
-});
+  }).strict(),
+}).strict();
 
 type MinimumIncomeCredential = z.infer<typeof MinimumIncomeCredentialSchema>;
 
@@ -94,6 +101,8 @@ export class CredentialsService {
   constructor(
     private readonly prisma: PrismaService,
     configService: ConfigService,
+    @Optional()
+    private readonly anchoring?: ContractAnchoringService,
   ) {
     this.signingSecret = configService.getOrThrow<string>(
       "credentialSigningSecret",
@@ -129,6 +138,15 @@ export class CredentialsService {
       return { result: "unsupported_schema" };
     }
 
+    const submittedProof = raw["proof"];
+    if (
+      submittedProof !== null &&
+      typeof submittedProof === "object" &&
+      (submittedProof as Record<string, unknown>)["type"] !== "HMAC-SHA256"
+    ) {
+      return { result: "unsupported_key" };
+    }
+
     // ------------------------------------------------------------------
     // 3. Shape validation via Zod
     // ------------------------------------------------------------------
@@ -150,6 +168,10 @@ export class CredentialsService {
     const { proof, ...credentialBody } = credential;
     const canonicalPayload = canonicalize(credentialBody);
     const credentialHash = `sha256:${sha256(canonicalPayload)}`;
+
+    if (!safeEqual(credentialHash, proof.credentialHash)) {
+      return { result: "invalid_signature" };
+    }
 
     // ------------------------------------------------------------------
     // 5. Signature check — recompute HMAC and compare timing-safely
@@ -173,9 +195,11 @@ export class CredentialsService {
     const record = await this.prisma.proof.findUnique({
       where: { credentialHash },
       select: {
+        id: true,
         status: true,
         expiresAt: true,
         schemaVersion: true,
+        contractTransactionHash: true,
       },
     });
 
@@ -197,7 +221,10 @@ export class CredentialsService {
       return { result: "revoked" };
     }
 
-    if (record.expiresAt <= new Date()) {
+    if (
+      record.expiresAt <= new Date() ||
+      new Date(credential.expiresAt) <= new Date()
+    ) {
       this.logger.log({
         event: "credential_verify",
         result: "expired",
@@ -213,6 +240,17 @@ export class CredentialsService {
         credentialHash,
       });
       return { result: "unverified_issuer" };
+    }
+
+    if (record.contractTransactionHash && this.anchoring) {
+      try {
+        const anchor = await this.anchoring.getProofStatus(record.id);
+        if (!anchor.checked) return { result: "unknown_anchor" };
+        if (anchor.revoked) return { result: "revoked" };
+        if (!anchor.valid) return { result: "unverified_issuer" };
+      } catch {
+        return { result: "unknown_anchor" };
+      }
     }
 
     // ------------------------------------------------------------------
