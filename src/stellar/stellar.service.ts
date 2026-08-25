@@ -3,6 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import {
   HorizonCollection,
   HorizonPaymentRecord,
+  HorizonTransactionRecord,
   NormalizedPayment,
 } from "./stellar.types";
 
@@ -34,6 +35,21 @@ export class StellarService {
       .filter((record) => record.to === walletAddress)
       .filter((record) => Boolean(record.from && record.amount))
       .map((record) => this.normalizePayment(record));
+  }
+
+  async fetchTransaction(
+    transactionHash: string,
+  ): Promise<HorizonTransactionRecord | null> {
+    const response = await fetch(
+      `${this.horizonUrl}/transactions/${encodeURIComponent(transactionHash)}`,
+    );
+
+    if (!response.ok) {
+      throw new Error(`Stellar Horizon request failed with ${response.status}`);
+    }
+
+    const transaction = (await response.json()) as HorizonTransactionRecord;
+    return transaction && typeof transaction === "object" ? transaction : null;
   }
 
   private normalizePayment(record: HorizonPaymentRecord): NormalizedPayment {

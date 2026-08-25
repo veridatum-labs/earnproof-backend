@@ -86,6 +86,10 @@ describe("ProofsService", () => {
     expect(result.credential.claim.qualifyingPaymentCount).toBe(1);
     expect(JSON.stringify(result)).not.toContain("125.50");
     expect(JSON.stringify(result)).not.toContain("payment_1");
+    expect(JSON.stringify(result)).not.toMatch(/memo(Context)?/i);
+    expect(prisma.payment.findMany.mock.calls[0][0].select).not.toHaveProperty(
+      "memo",
+    );
     expect(result.credential.proof.signature).toMatch(/^hmac-sha256:/);
     expect(prisma.proof.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -208,6 +212,8 @@ describe("ProofsService", () => {
     const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     const result = await service.verifyProof("proof_1");
+
+    expect(JSON.stringify(result)).not.toMatch(/memo(Context)?/i);
 
     expect(result.result).toBe(VerificationResult.REVOKED);
     expect(result.status).toBe("revoked");
