@@ -332,6 +332,6 @@ model AnchoringIntent {
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 
-  @@index([status, nextRetryAt])
-  @@index([proofId, operation])
+  @@index([nextRetryAt])
+  @@index([proofId])
 }
