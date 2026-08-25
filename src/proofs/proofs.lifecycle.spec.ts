@@ -24,6 +24,13 @@ describe("ProofsService lifecycle", () => {
         };
         return values[key];
       }),
+      get: jest.fn((key: string) => {
+        const values: Record<string, boolean | undefined> = {
+          "contractAnchoring.enabled": false,
+          "contractAnchoring.required": false,
+        };
+        return values[key];
+      }),
     } as never, mockVerificationEventService);
     const user = {
       id: "user_lifecycle",
@@ -124,15 +131,15 @@ function createProofStore() {
           }, {}),
         );
       }),
-      verificationEvent: {
-        create: jest.fn(({ data }) => {
-          verificationEvents.push(data);
-          return Promise.resolve({ id: `event_${verificationEvents.length}` });
-        }),
-      },
       verificationEventLog: {
         create: jest.fn().mockResolvedValue({ id: "event_1" }),
       },
+    },
+    verificationEvent: {
+      create: jest.fn(({ data }) => {
+        verificationEvents.push(data);
+        return Promise.resolve({ id: `event_${verificationEvents.length}` });
+      }),
     },
     // $transaction is used by createMinimumIncomeProof and revokeProof.
     $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) => {

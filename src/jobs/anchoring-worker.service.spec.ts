@@ -53,6 +53,7 @@ function makePrisma(intentOverrides?: Record<string, unknown>) {
     proof: {
       update: jest.fn().mockResolvedValue({ id: "proof_1" }),
     },
+    $queryRaw: jest.fn().mockResolvedValue([]),
     $transaction: jest.fn().mockImplementation(async (arg) => {
       if (typeof arg === "function") {
         return arg({
@@ -275,6 +276,7 @@ describe("AnchoringWorkerService", () => {
       // Override to simulate stale PROCESSING reset finds 2 records.
       prisma.anchoringIntent.updateMany = jest.fn().mockResolvedValue({ count: 2 });
       // processBatch claims nothing.
+      (prisma.$queryRaw as jest.Mock).mockResolvedValue([]);
       prisma.$transaction = jest.fn().mockResolvedValue([]);
 
       const worker = new AnchoringWorkerService(
@@ -462,8 +464,15 @@ describe("AnchoringWorkerService", () => {
 
       // $queryRaw (atomic UPDATE...RETURNING) was called
       expect(prisma.$queryRaw).toHaveBeenCalled();
-      // It returned the claimed rows
-      expect(prisma.$queryRaw).toHaveBeenCalledWith(expect.stringContaining("UPDATE"));
+      // It returned the claimed rows (check the first argument of the first call)
+      const firstCall = (prisma.$queryRaw as jest.Mock).mock.calls[0];
+      expect(firstCall).toBeDefined();
+      // When called as a tagged template, the first arg is an array of strings
+      if (Array.isArray(firstCall[0])) {
+        expect(firstCall[0].join("")).toContain("UPDATE");
+      } else {
+        expect(firstCall[0]).toContain("UPDATE");
+      }
       // The anchoring service was called for each claimed intent
       expect(anchoring.anchorProof).toHaveBeenCalledTimes(1);
     });
