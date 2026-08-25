@@ -34,6 +34,11 @@ export enum ApiErrorCode {
 
   // 404 – resource does not exist (or is hidden for security)
   NOT_FOUND = "NOT_FOUND",
+  PAYMENT_NOT_FOUND = "PAYMENT_NOT_FOUND",
+
+  // 422 - payment cannot be used for the requested proof
+  PAYMENT_NOT_ELIGIBLE = "PAYMENT_NOT_ELIGIBLE",
+  PAYMENT_EXCLUDED = "PAYMENT_EXCLUDED",
 
   // 409 – request conflicts with current state
   CONFLICT = "CONFLICT",
@@ -57,7 +62,8 @@ export class FieldViolationDto {
   field!: string;
 
   @ApiProperty({
-    description: "Human-readable description of the constraint that was violated.",
+    description:
+      "Human-readable description of the constraint that was violated.",
     example: "walletAddress must be exactly 56 characters",
   })
   message!: string;
@@ -82,14 +88,16 @@ export class ApiErrorDto {
   statusCode!: number;
 
   @ApiProperty({
-    description: "Stable machine-readable error code. Clients should branch on this, not on `message`.",
+    description:
+      "Stable machine-readable error code. Clients should branch on this, not on `message`.",
     enum: ApiErrorCode,
     example: ApiErrorCode.INVALID_TOKEN,
   })
   code!: ApiErrorCode;
 
   @ApiProperty({
-    description: "Human-readable error description. May change across releases; do not parse.",
+    description:
+      "Human-readable error description. May change across releases; do not parse.",
     example: "Authentication token is invalid.",
   })
   message!: string;
@@ -102,7 +110,8 @@ export class ApiErrorDto {
   requestId!: string;
 
   @ApiPropertyOptional({
-    description: "Present only on 422 validation errors. Lists each field that failed.",
+    description:
+      "Present only on 422 validation errors. Lists each field that failed.",
     type: [FieldViolationDto],
   })
   violations?: FieldViolationDto[];

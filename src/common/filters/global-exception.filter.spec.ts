@@ -6,6 +6,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
   UnauthorizedException,
+  UnprocessableEntityException,
 } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { GlobalExceptionFilter } from "./global-exception.filter";
@@ -13,9 +14,7 @@ import { ApiErrorCode } from "../dto/api-error.dto";
 
 // ─── Minimal mock helpers ─────────────────────────────────────────────────────
 
-function makeHost(
-  requestOverrides: Record<string, unknown> = {},
-): {
+function makeHost(requestOverrides: Record<string, unknown> = {}): {
   host: ArgumentsHost;
   json: jest.Mock;
   setHeader: jest.Mock;
@@ -93,13 +92,29 @@ describe("GlobalExceptionFilter", () => {
 
   describe("UnauthorizedException mapping", () => {
     const cases: [string, ApiErrorCode, string][] = [
-      ["Missing bearer token", ApiErrorCode.MISSING_TOKEN, "Authentication is required"],
+      [
+        "Missing bearer token",
+        ApiErrorCode.MISSING_TOKEN,
+        "Authentication is required",
+      ],
       ["Malformed auth token", ApiErrorCode.INVALID_TOKEN, "malformed"],
       ["Invalid auth token", ApiErrorCode.INVALID_TOKEN, "invalid"],
       ["Expired auth token", ApiErrorCode.EXPIRED_TOKEN, "expired"],
-      ["Challenge is expired or unavailable", ApiErrorCode.INVALID_CREDENTIALS, "challenge"],
-      ["Invalid wallet signature", ApiErrorCode.INVALID_CREDENTIALS, "signature"],
-      ["User session is no longer valid", ApiErrorCode.SESSION_EXPIRED, "session"],
+      [
+        "Challenge is expired or unavailable",
+        ApiErrorCode.INVALID_CREDENTIALS,
+        "challenge",
+      ],
+      [
+        "Invalid wallet signature",
+        ApiErrorCode.INVALID_CREDENTIALS,
+        "signature",
+      ],
+      [
+        "User session is no longer valid",
+        ApiErrorCode.SESSION_EXPIRED,
+        "session",
+      ],
     ];
 
     it.each(cases)(
@@ -110,14 +125,18 @@ describe("GlobalExceptionFilter", () => {
         expect(status).toHaveBeenCalledWith(HttpStatus.UNAUTHORIZED);
         const body = json.mock.calls[0][0] as { code: string; message: string };
         expect(body.code).toBe(expectedCode);
-        expect(body.message.toLowerCase()).toContain(messageFragment.toLowerCase());
+        expect(body.message.toLowerCase()).toContain(
+          messageFragment.toLowerCase(),
+        );
       },
     );
 
     it("falls back to INVALID_TOKEN for unknown 401 messages", () => {
       const { host, json } = makeHost();
       filter.catch(new UnauthorizedException("Some unknown auth error"), host);
-      expect(json.mock.calls[0][0]).toMatchObject({ code: ApiErrorCode.INVALID_TOKEN });
+      expect(json.mock.calls[0][0]).toMatchObject({
+        code: ApiErrorCode.INVALID_TOKEN,
+      });
     });
   });
 
@@ -148,7 +167,10 @@ describe("GlobalExceptionFilter", () => {
 
     it("surfaces the developer message for plain-string 400 exceptions", () => {
       const { host, json, status } = makeHost();
-      filter.catch(new BadRequestException("periodStart must be before periodEnd"), host);
+      filter.catch(
+        new BadRequestException("periodStart must be before periodEnd"),
+        host,
+      );
       expect(status).toHaveBeenCalledWith(HttpStatus.BAD_REQUEST);
       const body = json.mock.calls[0][0] as { code: string; message: string };
       expect(body.code).toBe(ApiErrorCode.INVALID_INPUT);
@@ -163,14 +185,35 @@ describe("GlobalExceptionFilter", () => {
       const { host, json, status } = makeHost();
       filter.catch(new NotFoundException("Payment not found"), host);
       expect(status).toHaveBeenCalledWith(HttpStatus.NOT_FOUND);
-      expect(json.mock.calls[0][0]).toMatchObject({ code: ApiErrorCode.NOT_FOUND });
+      expect(json.mock.calls[0][0]).toMatchObject({
+        code: ApiErrorCode.NOT_FOUND,
+      });
+    });
+
+    it("preserves allowlisted domain error codes", () => {
+      const { host, json, status } = makeHost();
+      filter.catch(
+        new UnprocessableEntityException({
+          code: ApiErrorCode.PAYMENT_EXCLUDED,
+          message: "Payment is excluded from proof issuance",
+        }),
+        host,
+      );
+
+      expect(status).toHaveBeenCalledWith(HttpStatus.UNPROCESSABLE_ENTITY);
+      expect(json.mock.calls[0][0]).toMatchObject({
+        code: ApiErrorCode.PAYMENT_EXCLUDED,
+        message: "Payment is excluded from proof issuance",
+      });
     });
 
     it("maps ForbiddenException → 403 FORBIDDEN", () => {
       const { host, json, status } = makeHost();
       filter.catch(new ForbiddenException(), host);
       expect(status).toHaveBeenCalledWith(HttpStatus.FORBIDDEN);
-      expect(json.mock.calls[0][0]).toMatchObject({ code: ApiErrorCode.FORBIDDEN });
+      expect(json.mock.calls[0][0]).toMatchObject({
+        code: ApiErrorCode.FORBIDDEN,
+      });
     });
 
     it("maps dependency exceptions to 503 DEPENDENCY_UNAVAILABLE", () => {
@@ -203,21 +246,27 @@ describe("GlobalExceptionFilter", () => {
       const { host, json, status } = makeHost();
       filter.catch(makePrismaKnown("P2025"), host);
       expect(status).toHaveBeenCalledWith(HttpStatus.NOT_FOUND);
-      expect(json.mock.calls[0][0]).toMatchObject({ code: ApiErrorCode.NOT_FOUND });
+      expect(json.mock.calls[0][0]).toMatchObject({
+        code: ApiErrorCode.NOT_FOUND,
+      });
     });
 
     it("maps P2002 (unique violation) → 409 CONFLICT", () => {
       const { host, json, status } = makeHost();
       filter.catch(makePrismaKnown("P2002"), host);
       expect(status).toHaveBeenCalledWith(HttpStatus.CONFLICT);
-      expect(json.mock.calls[0][0]).toMatchObject({ code: ApiErrorCode.CONFLICT });
+      expect(json.mock.calls[0][0]).toMatchObject({
+        code: ApiErrorCode.CONFLICT,
+      });
     });
 
     it("maps P2003 (foreign-key violation) → 409 CONFLICT", () => {
       const { host, json, status } = makeHost();
       filter.catch(makePrismaKnown("P2003"), host);
       expect(status).toHaveBeenCalledWith(HttpStatus.CONFLICT);
-      expect(json.mock.calls[0][0]).toMatchObject({ code: ApiErrorCode.CONFLICT });
+      expect(json.mock.calls[0][0]).toMatchObject({
+        code: ApiErrorCode.CONFLICT,
+      });
     });
 
     it("maps P1001 (connection error) → 503 DEPENDENCY_UNAVAILABLE", () => {
@@ -233,7 +282,9 @@ describe("GlobalExceptionFilter", () => {
       const { host, json, status } = makeHost();
       filter.catch(makePrismaKnown("P9999"), host);
       expect(status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR);
-      expect(json.mock.calls[0][0]).toMatchObject({ code: ApiErrorCode.INTERNAL_ERROR });
+      expect(json.mock.calls[0][0]).toMatchObject({
+        code: ApiErrorCode.INTERNAL_ERROR,
+      });
     });
 
     it("maps PrismaClientUnknownRequestError → 503 DEPENDENCY_UNAVAILABLE", () => {
@@ -268,7 +319,9 @@ describe("GlobalExceptionFilter", () => {
         host,
       );
       expect(status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR);
-      expect(json.mock.calls[0][0]).toMatchObject({ code: ApiErrorCode.INTERNAL_ERROR });
+      expect(json.mock.calls[0][0]).toMatchObject({
+        code: ApiErrorCode.INTERNAL_ERROR,
+      });
     });
   });
 
@@ -279,7 +332,9 @@ describe("GlobalExceptionFilter", () => {
       const { host, json, status } = makeHost();
       filter.catch(new Error("something exploded"), host);
       expect(status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR);
-      expect(json.mock.calls[0][0]).toMatchObject({ code: ApiErrorCode.INTERNAL_ERROR });
+      expect(json.mock.calls[0][0]).toMatchObject({
+        code: ApiErrorCode.INTERNAL_ERROR,
+      });
     });
 
     it("does NOT include the internal error message in the response body", () => {

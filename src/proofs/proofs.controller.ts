@@ -20,6 +20,7 @@ import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { AuthGuard } from "../common/guards/auth.guard";
 import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.dto";
+import { CreatePaymentReceiptProofDto } from "./dto/create-payment-receipt-proof.dto";
 import { ProofCreatedDto } from "./dto/proof-created.dto";
 import { RevokeProofResponseDto } from "./dto/revoke-proof-response.dto";
 import { VerifyProofResponseDto } from "./dto/verify-proof-response.dto";
@@ -32,6 +33,42 @@ export class ProofsController {
   constructor(private readonly proofsService: ProofsService) {}
 
   @ApiOperation({
+    summary: "Create a selectively disclosed payment-receipt proof",
+    description:
+      "Issues a receipt credential for one eligible payment owned by the authenticated user. Sender and exact amount are hidden unless independently opted in.",
+  })
+  @ApiBearerAuth()
+  @ApiResponse({
+    status: HttpStatus.CREATED,
+    description: "Payment-receipt proof created.",
+    type: ProofCreatedDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: "Payment does not exist or belongs to another user.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    description:
+      "Payment is excluded, ineligible, or request validation failed.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @UseGuards(AuthGuard)
+  @Post("payment-receipt")
+  createPaymentReceiptProof(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: CreatePaymentReceiptProofDto,
+  ) {
+    return this.proofsService.createPaymentReceiptProof(user, body);
+  }
+
+  @ApiOperation({
     summary: "Create a minimum-income proof",
     description:
       "Generates a privacy-preserving credential asserting that the authenticated wallet " +
@@ -42,7 +79,8 @@ export class ProofsController {
   @ApiBearerAuth()
   @ApiResponse({
     status: HttpStatus.CREATED,
-    description: "Proof created. Returns the signed credential and an optional anchoring result.",
+    description:
+      "Proof created. Returns the signed credential and an optional anchoring result.",
     type: ProofCreatedDto,
   })
   @ApiResponse({
@@ -79,7 +117,11 @@ export class ProofsController {
       "Only the owner of the proof may revoke it.",
   })
   @ApiBearerAuth()
-  @ApiParam({ name: "id", description: "Proof ID (uuid).", example: "018e1234-abcd-7000-8000-abcdef012345" })
+  @ApiParam({
+    name: "id",
+    description: "Proof ID (uuid).",
+    example: "018e1234-abcd-7000-8000-abcdef012345",
+  })
   @ApiResponse({
     status: HttpStatus.OK,
     description: "Proof revoked.",
@@ -102,10 +144,7 @@ export class ProofsController {
   })
   @UseGuards(AuthGuard)
   @Patch(":id/revoke")
-  revokeProof(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param("id") id: string,
-  ) {
+  revokeProof(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
     return this.proofsService.revokeProof(user.id, id);
   }
 
@@ -116,7 +155,11 @@ export class ProofsController {
       "HMAC commitment, and returns the verification result. No authentication required — " +
       "third parties such as issuers can call this endpoint directly.",
   })
-  @ApiParam({ name: "id", description: "Proof ID (uuid).", example: "018e1234-abcd-7000-8000-abcdef012345" })
+  @ApiParam({
+    name: "id",
+    description: "Proof ID (uuid).",
+    example: "018e1234-abcd-7000-8000-abcdef012345",
+  })
   @ApiResponse({
     status: HttpStatus.OK,
     description: "Verification result and the signed credential.",
