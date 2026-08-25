@@ -315,13 +315,6 @@ describe("ProofsService", () => {
         create: jest.fn().mockResolvedValue({ id: "event_1" }),
       },
     };
-    const anchoring = {
-      getProofStatus: jest.fn().mockResolvedValue({
-        checked: true,
-        revoked: true,
-        valid: false,
-      }),
-    };
     const service = new ProofsService(
       prisma as never,
       config as never,
