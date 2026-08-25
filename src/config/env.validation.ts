@@ -42,6 +42,18 @@ const envSchema = z.object({
     z.string().regex(/^G[A-Z2-7]{55}$/),
   ),
   EARNPROOF_SCHEMA_VERSION: z.coerce.number().int().positive().optional(),
+  VERIFICATION_EVENT_RETENTION_DAYS: z
+    .coerce.number()
+    .int()
+    .positive()
+    .optional()
+    .default(90),
+  VERIFICATION_HASH_SALT_VERSION: z
+    .coerce.number()
+    .int()
+    .nonnegative()
+    .optional()
+    .default(0),
 });
 
 export function validateEnv(config: Record<string, unknown>) {

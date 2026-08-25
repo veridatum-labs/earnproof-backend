@@ -32,4 +32,14 @@ export class ProofsController {
   verifyProof(@Param("id") id: string) {
     return this.proofsService.verifyProof(id);
   }
+
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard)
+  @Get(":id/verification-stats")
+  getVerificationStats(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+  ) {
+    return this.proofsService.getVerificationStats(user.id, id);
+  }
 }
