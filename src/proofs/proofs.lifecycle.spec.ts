@@ -5,10 +5,16 @@ import {
   VerificationResult,
 } from "@prisma/client";
 import { ProofsService } from "./proofs.service";
+import { VerificationEventService } from "../audit/verification-event.service";
 
 describe("ProofsService lifecycle", () => {
   it("creates, verifies, revokes, and re-verifies a minimum income proof", async () => {
     const store = createProofStore();
+    const mockVerificationEventService = {
+      recordEvent: jest.fn().mockResolvedValue(undefined),
+      getAggregateStats: jest.fn().mockResolvedValue({}),
+      cleanupExpiredEvents: jest.fn().mockResolvedValue(0),
+    } as unknown as VerificationEventService;
     const service = new ProofsService(store.prisma as never, {
       getOrThrow: jest.fn((key: string) => {
         const values: Record<string, string> = {
@@ -18,7 +24,7 @@ describe("ProofsService lifecycle", () => {
         };
         return values[key];
       }),
-    } as never);
+    } as never, mockVerificationEventService);
     const user = {
       id: "user_lifecycle",
       walletAddress: "GB_TEST",

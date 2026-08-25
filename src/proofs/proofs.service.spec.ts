@@ -6,6 +6,7 @@ import {
 } from "@prisma/client";
 import { sha256 } from "../common/crypto/hash";
 import { ProofsService } from "./proofs.service";
+import { VerificationEventService } from "../audit/verification-event.service";
 
 describe("ProofsService", () => {
   const config = {
@@ -18,6 +19,12 @@ describe("ProofsService", () => {
       return values[key];
     }),
   };
+
+  const mockVerificationEventService = {
+    recordEvent: jest.fn().mockResolvedValue(undefined),
+    getAggregateStats: jest.fn().mockResolvedValue({}),
+    cleanupExpiredEvents: jest.fn().mockResolvedValue(0),
+  } as unknown as VerificationEventService;
 
   const user = {
     id: "user_1",
@@ -63,7 +70,7 @@ describe("ProofsService", () => {
         })),
       },
     };
-    const service = new ProofsService(prisma as never, config as never);
+    const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     const result = await service.createMinimumIncomeProof(user, {
       selectedPaymentIds: ["payment_1"],
@@ -110,7 +117,7 @@ describe("ProofsService", () => {
         ]),
       },
     };
-    const service = new ProofsService(prisma as never, config as never);
+    const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     await expect(
       service.createMinimumIncomeProof(user, {
@@ -129,7 +136,7 @@ describe("ProofsService", () => {
         findUnique: jest.fn().mockResolvedValue(null),
       },
     };
-    const service = new ProofsService(prisma as never, config as never);
+    const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     await expect(service.verifyProof("missing")).resolves.toEqual({
       result: VerificationResult.UNKNOWN_PROOF,
@@ -195,7 +202,7 @@ describe("ProofsService", () => {
         create: jest.fn().mockResolvedValue({ id: "event_1" }),
       },
     };
-    const service = new ProofsService(prisma as never, config as never);
+    const service = new ProofsService(prisma as never, config as never, mockVerificationEventService);
 
     const result = await service.verifyProof("proof_1");
 
@@ -234,7 +241,7 @@ describe("ProofsService", () => {
     const service = new ProofsService(
       prisma as never,
       config as never,
-      anchoring as never,
+      mockVerificationEventService,
     );
 
     await expect(service.revokeProof("user_1", "proof_anchored")).resolves.toEqual(
@@ -318,7 +325,7 @@ describe("ProofsService", () => {
     const service = new ProofsService(
       prisma as never,
       config as never,
-      anchoring as never,
+      mockVerificationEventService,
     );
 
     const result = await service.verifyProof("proof_onchain_revoked");
