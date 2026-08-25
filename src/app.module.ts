@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
+import { AuditModule } from "./audit/audit.module";
 import { AuthModule } from "./auth/auth.module";
 import { configuration } from "./config/configuration";
 import { validateEnv } from "./config/env.validation";
@@ -17,6 +18,7 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
       validate: validateEnv,
     }),
     DatabaseModule,
+    AuditModule,
     AuthModule,
     HealthModule,
     PaymentsModule,
