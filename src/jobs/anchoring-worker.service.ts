@@ -161,7 +161,6 @@ export class AnchoringWorkerService {
     // The UPDATE statement must include the WHERE condition (nextRetryAt check)
     // to limit the set, and only return the rows actually updated by this
     // statement, not rows selected before update.
-    const nextRetryAtThreshold = new Date(0); // epoch for NULL comparison
     const claimed = await this.prisma.$queryRaw<
       Array<{
         id: string;

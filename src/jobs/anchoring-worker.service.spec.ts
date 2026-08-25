@@ -331,11 +331,9 @@ describe("AnchoringWorkerService", () => {
       // Worker 2 fails (UPDATE returns zero rows because status is now PROCESSING).
       const now = new Date();
       const intent1 = makeIntent({ id: "intent_1", proofId: "proof_1" });
-      const intent2 = makeIntent({ id: "intent_2", proofId: "proof_2" });
 
       // Worker 1: UPDATE succeeds, returns intent_1
       // Worker 2: UPDATE fails (row already claimed), returns empty array
-      let callCount = 0;
       const prisma = {
         anchoringIntent: {
           findUnique: jest.fn().mockResolvedValue(intent1),
@@ -527,11 +525,9 @@ describe("AnchoringWorkerService", () => {
         ),
       );
 
-      const worker = new AnchoringWorkerService(
-        prisma as never,
-        makeAnchoring() as never,
-        makeConfig() as never,
-      );
+      // Note: The worker instance is created but not used in this test because
+      // we're directly testing the Prisma constraint behavior without going through the service.
+      // This tests the database-level constraint independently.
 
       // Attempting to create a second PROCESSING intent for the same (proofId, operation)
       // should fail with a unique constraint error.
