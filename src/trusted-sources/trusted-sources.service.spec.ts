@@ -12,7 +12,7 @@ describe("TrustedSourcesService", () => {
     role: "WORKER",
   };
 
-  const validStellarAddress = "GBXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+  const validStellarAddress = "GA7VQQHSVVZKN3ZKQV447QVFVXHQDZV7SXUQE3ALN75MNKPVZ2JVXVJ";
 
   describe("createTrustedSource", () => {
     it("creates a new trusted source with normalized address", async () => {

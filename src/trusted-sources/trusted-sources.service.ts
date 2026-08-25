@@ -44,9 +44,9 @@ export class TrustedSourcesService {
     user: AuthenticatedUser,
     input: CreateTrustedSourceDto,
   ) {
-    // Validate and normalize address
-    this.validateAddressFormat(input.sourceAddress);
+    // Normalize and validate address
     const normalizedAddress = this.normalizeAddress(input.sourceAddress);
+    this.validateAddressFormat(normalizedAddress);
 
     // Check for duplicate trusted source per user
     const existing = await this.prisma.trustedSource.findUnique({
