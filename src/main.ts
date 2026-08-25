@@ -66,7 +66,7 @@ async function bootstrap() {
       {
         type: "http",
         scheme: "bearer",
-        bearerFormat: "HMAC-signed token",
+        bearerFormat: "Opaque session token",
         description:
           "Bearer token obtained from `POST /api/v1/auth/verify`. " +
           "Include as `Authorization: Bearer <token>`.",

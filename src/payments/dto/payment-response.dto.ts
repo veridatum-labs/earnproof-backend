@@ -13,9 +13,6 @@ export class PaymentResponseDto {
   @ApiProperty({ example: "clx1abc2def3ghi4" })
   id!: string;
 
-  @ApiProperty({ example: "clx1abc2def3ghi4" })
-  userId!: string;
-
   @ApiProperty({
     description: "SHA-256 hash of the Stellar transaction that contains this operation.",
     example: "a1b2c3d4e5f6...",
@@ -56,11 +53,16 @@ export class PaymentResponseDto {
   })
   occurredAt!: string;
 
-  @ApiPropertyOptional({
-    description: "Optional memo attached to the Stellar transaction.",
-    nullable: true,
+  @ApiProperty({
+    description:
+      "Bounded transaction memo context visible only to the authenticated payment owner.",
+    example: { type: "text", value: "Salary June", truncated: false },
   })
-  memo!: string | null;
+  memoContext!: {
+    type: "none" | "text" | "id" | "hash" | "return_hash";
+    value?: string;
+    truncated?: boolean;
+  };
 
   @ApiProperty({
     description: "User-assigned classification for this payment.",

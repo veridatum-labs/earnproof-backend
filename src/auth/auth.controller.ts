@@ -8,19 +8,24 @@ import {
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { AuthGuard } from "../common/guards/auth.guard";
-import { AuthenticatedUser } from "./auth.types";
+import { AuthenticatedSession } from "./auth.types";
 import { AuthService } from "./auth.service";
 import { ChallengeResponseDto } from "./dto/challenge-response.dto";
 import { CreateChallengeDto } from "./dto/create-challenge.dto";
 import { LogoutResponseDto } from "./dto/logout-response.dto";
+import { RotateResponseDto } from "./dto/rotate-response.dto";
 import { SessionResponseDto } from "./dto/session-response.dto";
 import { VerifyChallengeDto } from "./dto/verify-challenge.dto";
 import { VerifyResponseDto } from "./dto/verify-response.dto";
+import { SessionService } from "./session.service";
 
 @ApiTags("auth")
 @Controller("auth")
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly sessionService: SessionService,
+  ) {}
 
   @ApiOperation({
     summary: "Request a wallet challenge",
@@ -97,24 +102,59 @@ export class AuthController {
   })
   @UseGuards(AuthGuard)
   @Get("session")
-  getSession(@CurrentUser() user: AuthenticatedUser) {
-    return this.authService.getSession(user.id);
+  getSession(@CurrentUser() session: AuthenticatedSession) {
+    return this.authService.getSession(session.id);
   }
 
   @ApiOperation({
-    summary: "Log out (client-side token invalidation)",
+    summary: "Log out and revoke the active session",
     description:
-      "Signals logout intent. Because tokens are stateless HMAC tokens the server has no " +
-      "token store to clear; the client must discard the token. Returns a confirmation envelope.",
+      "Revokes the authenticated session server-side so its bearer token cannot be reused.",
   })
   @ApiResponse({
     status: HttpStatus.OK,
-    description: "Logout acknowledged.",
+    description: "Session revoked successfully.",
     type: LogoutResponseDto,
   })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, expired, or revoked.",
+    type: ApiErrorDto,
+  })
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard)
   @HttpCode(HttpStatus.OK)
   @Post("logout")
-  logout(): LogoutResponseDto {
+  async logout(@CurrentUser() session: AuthenticatedSession) {
+    await this.authService.logout(session.sessionId);
     return { status: "ok" };
+  }
+
+  @ApiOperation({
+    summary: "Rotate the active session",
+    description:
+      "Atomically revokes the current session and returns a fresh opaque bearer token.",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "Session rotated successfully.",
+    type: RotateResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "The active session is unavailable, expired, or already revoked.",
+    type: ApiErrorDto,
+  })
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post("rotate")
+  async rotate(@CurrentUser() session: AuthenticatedSession) {
+    const { token, sessionId, expiresAt } = await this.sessionService.rotate(
+      session.sessionId,
+      session,
+    );
+
+    return { token, tokenType: "Bearer", sessionId, expiresAt };
   }
 }
