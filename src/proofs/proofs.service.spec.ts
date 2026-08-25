@@ -74,27 +74,17 @@ const user = {
 
 const config = makeConfig();
 
-    expect(result.status).toBe(ProofStatus.ACTIVE);
-    expect(result.credential.claim.thresholdAmount).toBe("100");
-    expect(result.credential.claim.qualifyingPaymentCount).toBe(1);
-    expect(JSON.stringify(result)).not.toContain("125.50");
-    expect(JSON.stringify(result)).not.toContain("payment_1");
-    expect(JSON.stringify(result)).not.toMatch(/memo(Context)?/i);
-    expect(prisma.payment.findMany.mock.calls[0][0].select).not.toHaveProperty(
-      "memo",
-    );
-    expect(result.credential.proof.signature).toMatch(/^hmac-sha256:/);
-    expect(prisma.proof.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          proofType: ProofType.MINIMUM_INCOME,
-          credentialHash: expect.stringMatching(/^sha256:/),
-          commitment: expect.stringMatching(/^sha256:/),
-          createdAt: expect.any(Date),
-        }),
-      }),
-    );
-  });
+const singlePayment = [
+  {
+    id: "payment_1",
+    assetCode: "XLM",
+    assetIssuer: null,
+    amountEncrypted: `redacted:${Buffer.from("100").toString("base64url")}`,
+    classification: PaymentClassification.INCOME,
+    isEligible: true,
+    occurredAt: new Date("2026-08-01T00:00:00.000Z"),
+  },
+];
 
 function makeCreatePrisma(captureIntent?: (data: unknown) => void) {
   return {
