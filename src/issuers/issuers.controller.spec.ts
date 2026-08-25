@@ -1,6 +1,9 @@
 import { NotFoundException } from "@nestjs/common";
 import { ResourceStatus } from "@prisma/client";
 import { Test, TestingModule } from "@nestjs/testing";
+import { AuthTokenService } from "../../auth/auth-token.service";
+import { AuthGuard } from "../../common/guards/auth.guard";
+import { RoleGuard } from "../../common/guards/role.guard";
 import { IssuersController } from "./issuers.controller";
 import { IssuersService } from "./issuers.service";
 
@@ -56,8 +59,19 @@ describe("IssuersController", () => {
             listIssuersPublic: jest.fn(),
           },
         },
+        {
+          provide: AuthTokenService,
+          useValue: {
+            verify: jest.fn(),
+          },
+        },
       ],
-    }).compile();
+    })
+      .overrideGuard(AuthGuard)
+      .useValue({ canActivate: jest.fn(() => true) })
+      .overrideGuard(RoleGuard)
+      .useValue({ canActivate: jest.fn(() => true) })
+      .compile();
 
     controller = module.get<IssuersController>(IssuersController);
     service = module.get<IssuersService>(IssuersService);

@@ -43,7 +43,7 @@ describe("IssuersService", () => {
   const mockIssuer = {
     id: "issuer-1",
     organizationId: "org-1",
-    stellarAddress: "GBUQWP3BOUZX34ULNQG23RQ6F4BVWCIBTBTQUGS7SEEDS23ABC123DEF45",
+    stellarAddress: "GBFXVVSIVZHCSLMZ23N7QDOSFKMCXFQZ7S3KBXCGYZTZZBDSJ2SPCZYZ",
     status: ResourceStatus.PENDING,
     metadataHash: "hash123",
     verifiedAt: null,
@@ -95,7 +95,7 @@ describe("IssuersService", () => {
       const input = {
         organizationId: "org-1",
         stellarAddress:
-          "GBUQWP3BOUZX34ULNQG23RQ6F4BVWCIBTBTQUGS7SEEDS23ABC123DEF45",
+          "GBFXVVSIVZHCSLMZ23N7QDOSFKMCXFQZ7S3KBXCGYZTZZBDSJ2SPCZYZ",
         publicMetadata: { name: "Test Issuer" },
       };
 
@@ -129,7 +129,7 @@ describe("IssuersService", () => {
       const input = {
         organizationId: "org-1",
         stellarAddress:
-          "GBUQWP3BOUZX34ULNQG23RQ6F4BVWCIBTBTQUGS7SEEDS23ABC123DEF45",
+          "GBFXVVSIVZHCSLMZ23N7QDOSFKMCXFQZ7S3KBXCGYZTZZBDSJ2SPCZYZ",
       };
 
       jest
@@ -162,7 +162,7 @@ describe("IssuersService", () => {
       const input = {
         organizationId: "nonexistent",
         stellarAddress:
-          "GBUQWP3BOUZX34ULNQG23RQ6F4BVWCIBTBTQUGS7SEEDS23ABC123DEF45",
+          "GBFXVVSIVZHCSLMZ23N7QDOSFKMCXFQZ7S3KBXCGYZTZZBDSJ2SPCZYZ",
       };
 
       jest
