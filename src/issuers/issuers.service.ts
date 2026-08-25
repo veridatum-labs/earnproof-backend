@@ -18,9 +18,6 @@ import { SyncIssuerStatusResponseDto } from "./dto/sync-issuer-status.dto";
 import { UpdateIssuerMetadataDto } from "./dto/update-issuer-metadata.dto";
 import { UpdateIssuerStatusDto } from "./dto/update-issuer-status.dto";
 
-// Allowlisted metadata fields for public responses
-const ALLOWLISTED_METADATA_FIELDS = ["name", "description", "logoUrl"];
-
 // Valid status transitions
 const VALID_TRANSITIONS: Record<ResourceStatus, ResourceStatus[]> = {
   [ResourceStatus.PENDING]: [ResourceStatus.ACTIVE],
@@ -80,16 +77,14 @@ export class IssuersService {
       throw new BadRequestException("Invalid Stellar public key format");
     }
 
-    const metadataHash = input.publicMetadata
-      ? this.hashMetadata(input.publicMetadata)
-      : null;
-
     const issuer = await this.prisma.issuer.create({
       data: {
         organizationId: input.organizationId,
         stellarAddress: input.stellarAddress,
         status: ResourceStatus.PENDING,
-        metadataHash,
+        metadataHash: input.publicMetadata
+          ? this.hashMetadata(input.publicMetadata)
+          : null,
       },
     });
 

@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException } from "@nestjs/common";
+import { NotFoundException } from "@nestjs/common";
 import { ResourceStatus } from "@prisma/client";
 import { Test, TestingModule } from "@nestjs/testing";
 import { IssuersController } from "./issuers.controller";
