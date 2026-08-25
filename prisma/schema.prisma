@@ -82,6 +82,8 @@ enum AnchoringStatus {
   PROCESSING
   CONFIRMED
   FAILED
+}
+
 enum ApiKeyScope {
   // Proof verification and reading
   PROOF_READ
