@@ -43,14 +43,14 @@ import { TrustedSourcesModule } from "./trusted-sources/trusted-sources.module";
     PaymentsModule,
     ProofsModule,
     CredentialsModule,
+    TrustedSourcesModule,
+    JobsModule,
   ],
   providers: [
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
     },
-    TrustedSourcesModule,
-    JobsModule,
   ],
 })
 export class AppModule {}

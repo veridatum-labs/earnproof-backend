@@ -173,7 +173,7 @@ export class ProofsService {
       issuedAt: now,
       expiresAt,
     });
-    const credentialHash = `sha256:${sha256(this.canonicalize(credential))}`;
+    const credentialHash = `sha256:${sha256(canonicalize(credential))}`;
     const commitment = `sha256:${sha256(credentialHash)}`;
 
     const proof = await this.prisma.$transaction(async (tx) => {
@@ -401,7 +401,7 @@ export class ProofsService {
       issuedAt: now,
       expiresAt,
     });
-    const credentialHash = `sha256:${sha256(this.canonicalize(draftCredential))}`;
+    const credentialHash = `sha256:${sha256(canonicalize(draftCredential))}`;
     const commitment = `sha256:${sha256(credentialHash)}`;
 
     // Write Proof + ProofClaim + AnchoringIntent in a single transaction.

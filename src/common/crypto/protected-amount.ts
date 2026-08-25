@@ -13,12 +13,9 @@ export function encryptProtectedAmount(amount: string, keyMaterial: string) {
   ]);
   const tag = cipher.getAuthTag();
 
-  return [
-    ENCRYPTED_PREFIX,
-    iv.toString("base64url"),
-    tag.toString("base64url"),
-    ciphertext.toString("base64url"),
-  ].join("");
+  return `${ENCRYPTED_PREFIX}${iv.toString("base64url")}:${tag.toString(
+    "base64url",
+  )}:${ciphertext.toString("base64url")}`;
 }
 
 export function decryptProtectedAmount(value: string, keyMaterial: string) {
