@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
+import { ScheduleModule } from "@nestjs/schedule";
 import { AuditModule } from "./audit/audit.module";
 import { AuthModule } from "./auth/auth.module";
 import { configuration } from "./config/configuration";
@@ -17,6 +18,7 @@ import { ProofsModule } from "./proofs/proofs.module";
       load: [configuration],
       validate: validateEnv,
     }),
+    ScheduleModule.forRoot(),
     DatabaseModule,
     AuditModule,
     AuthModule,
