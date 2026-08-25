@@ -4,6 +4,10 @@ import { createHmac } from "crypto";
 import { AuthTokenPayload } from "./auth.types";
 import { safeEqual } from "../common/crypto/timing-safe";
 
+/**
+ * @deprecated Self-contained tokens cannot be revoked server-side. Use
+ * `SessionService` for all production authentication flows.
+ */
 @Injectable()
 export class AuthTokenService {
   private readonly secret: string;
