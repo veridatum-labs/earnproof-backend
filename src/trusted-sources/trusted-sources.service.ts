@@ -2,7 +2,6 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
-  NotFoundException,
 } from "@nestjs/common";
 import { ResourceStatus } from "@prisma/client";
 import { AuthenticatedUser } from "../auth/auth.types";
