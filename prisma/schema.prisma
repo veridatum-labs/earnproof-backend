@@ -332,6 +332,12 @@ model AnchoringIntent {
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 
+  // Unique constraint: only one PROCESSING or CONFIRMED intent per (proofId, operation).
+  // This enforces that the same operation (REGISTER or REVOKE) cannot be claimed or
+  // executed twice for a given proof, even if application logic is bypassed.
+  // PENDING intents are excluded because multiple PENDING intents may exist if one
+  // fails and is reset; only the claim transition is protected.
+  @@unique([proofId, operation], where: { status: { in: ["PROCESSING", "CONFIRMED"] } })
   @@index([nextRetryAt])
   @@index([proofId])
 }

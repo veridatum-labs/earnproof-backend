@@ -154,37 +154,68 @@ export class AnchoringWorkerService {
   private async processBatch(): Promise<void> {
     const now = new Date();
 
-    // Claim a batch atomically: move PENDING → PROCESSING in one update so
-    // concurrent workers on multi-replica deployments do not double-process.
-    // We first SELECT the IDs, then UPDATE to PROCESSING in a transaction.
-    const claimed = await this.prisma.$transaction(async (tx) => {
-      const candidates = await tx.anchoringIntent.findMany({
-        where: {
-          status: AnchoringStatus.PENDING,
-          OR: [{ nextRetryAt: null }, { nextRetryAt: { lte: now } }],
-        },
-        orderBy: { createdAt: "asc" },
-        take: BATCH_SIZE,
-        select: { id: true },
-      });
+    // Atomically claim a batch: use raw SQL UPDATE...RETURNING to ensure only
+    // rows that THIS worker transitions from PENDING→PROCESSING are returned.
+    // This prevents concurrent workers from double-processing the same intent.
+    //
+    // The UPDATE statement must include the WHERE condition (nextRetryAt check)
+    // to limit the set, and only return the rows actually updated by this
+    // statement, not rows selected before update.
+    const nextRetryAtThreshold = new Date(0); // epoch for NULL comparison
+    const claimed = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        proofId: string;
+        operation: AnchoringOperation;
+        status: AnchoringStatus;
+        attemptCount: number;
+        lastAttemptAt: Date | null;
+        nextRetryAt: Date | null;
+        transactionHash: string | null;
+        ledger: string | null;
+        lastErrorSafe: string | null;
+        permanentError: boolean;
+        createdAt: Date;
+        updatedAt: Date;
+      }>
+    >`
+      UPDATE "AnchoringIntent"
+      SET
+        status = ${AnchoringStatus.PROCESSING},
+        "lastAttemptAt" = ${now}
+      WHERE
+        status = ${AnchoringStatus.PENDING}
+        AND ("nextRetryAt" IS NULL OR "nextRetryAt" <= ${now})
+      ORDER BY "createdAt" ASC
+      LIMIT ${BATCH_SIZE}
+      RETURNING
+        id,
+        "proofId",
+        operation,
+        status,
+        "attemptCount",
+        "lastAttemptAt",
+        "nextRetryAt",
+        "transactionHash",
+        ledger,
+        "lastErrorSafe",
+        "permanentError",
+        "createdAt",
+        "updatedAt"
+    `;
 
-      if (candidates.length === 0) return [];
-
-      const ids = candidates.map((c) => c.id);
-
-      await tx.anchoringIntent.updateMany({
-        where: { id: { in: ids }, status: AnchoringStatus.PENDING },
-        data: { status: AnchoringStatus.PROCESSING, lastAttemptAt: now },
-      });
-
-      return tx.anchoringIntent.findMany({
-        where: { id: { in: ids } },
+    // Fetch the full intent records (including proof data) for execution.
+    // Since we already claimed them atomically above, we just need to
+    // retrieve the proof commitment and expiresAt.
+    for (const intentRow of claimed) {
+      const fullIntent = await this.prisma.anchoringIntent.findUnique({
+        where: { id: intentRow.id },
         include: { proof: { select: { commitment: true, expiresAt: true } } },
       });
-    });
 
-    for (const intent of claimed) {
-      await this.executeIntent(intent);
+      if (fullIntent) {
+        await this.executeIntent(fullIntent);
+      }
     }
   }
 
