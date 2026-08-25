@@ -54,10 +54,16 @@ describe("generated OpenAPI document", () => {
     expect(document.paths).toHaveProperty(
       "/api/v1/proofs/{id}/verification-stats.get",
     );
+    expect(document.paths).toHaveProperty("/api/v1/proofs.get");
+    expect(document.paths).toHaveProperty("/api/v1/proofs/{id}.get");
     expect(document.paths).toHaveProperty("/api/v1/payments.get");
     expect(document.paths).toHaveProperty(
       "/api/v1/proofs/payment-receipt.post",
     );
+    expect(document.paths).toHaveProperty("/api/v1/issuers.get");
+    expect(document.paths).toHaveProperty("/api/v1/issuers/{id}.get");
+    expect(document.paths).toHaveProperty("/api/v1/issuers/admin.get");
+    expect(document.paths).toHaveProperty("/api/v1/organizations.get");
     expect(document.paths).toHaveProperty("/api/v1/auth/verify.post");
   });
 });

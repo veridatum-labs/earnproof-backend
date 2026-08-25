@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from "@nestjs/common";
 import {
@@ -21,7 +22,12 @@ import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { AuthGuard } from "../common/guards/auth.guard";
 import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.dto";
 import { CreatePaymentReceiptProofDto } from "./dto/create-payment-receipt-proof.dto";
+import { ListProofsDto } from "./dto/list-proofs.dto";
 import { ProofCreatedDto } from "./dto/proof-created.dto";
+import {
+  ProofDetailResponseDto,
+  ProofListResponseDto,
+} from "./dto/proof-history-response.dto";
 import { RevokeProofResponseDto } from "./dto/revoke-proof-response.dto";
 import { VerifyProofResponseDto } from "./dto/verify-proof-response.dto";
 import { VerificationStatsDto } from "./dto/verification-stats.dto";
@@ -31,6 +37,67 @@ import { ProofsService } from "./proofs.service";
 @Controller("proofs")
 export class ProofsController {
   constructor(private readonly proofsService: ProofsService) {}
+
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "List the authenticated user's proofs",
+    description:
+      "Returns cursor-paginated proof summaries. The response separates local lifecycle status, credential validity, expiration, and contract anchoring state without exposing protected payment data.",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "Proof history page.",
+    type: ProofListResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.BAD_REQUEST,
+    description: "The cursor or issued-at date range is invalid.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @UseGuards(AuthGuard)
+  @Get()
+  listProofs(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ListProofsDto,
+  ) {
+    return this.proofsService.listProofs(user.id, query);
+  }
+
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Get an owned proof",
+    description:
+      "Returns proof details for the owner or an administrator. Unknown and non-owned proof IDs produce the same not-found response.",
+  })
+  @ApiParam({ name: "id", description: "Proof ID (uuid)." })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "Proof details.",
+    type: ProofDetailResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: "Proof not found or not accessible to this user.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @UseGuards(AuthGuard)
+  @Get(":id")
+  getProofDetail(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+  ) {
+    return this.proofsService.getProofDetail(user, id);
+  }
 
   @ApiOperation({
     summary: "Create a selectively disclosed payment-receipt proof",

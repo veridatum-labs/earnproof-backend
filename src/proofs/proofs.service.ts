@@ -9,6 +9,8 @@ import {
 import { ConfigService } from "@nestjs/config";
 import {
   PaymentClassification,
+  Proof,
+  ProofClaim,
   Prisma,
   ProofStatus,
   ProofType,
@@ -25,6 +27,7 @@ import { PrismaService } from "../database/prisma.service";
 import { ContractAnchoringService } from "./contract-anchoring.service";
 import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.dto";
 import { CreatePaymentReceiptProofDto } from "./dto/create-payment-receipt-proof.dto";
+import { ListProofsDto } from "./dto/list-proofs.dto";
 
 const SCHEMA_VERSION = "earnproof.minimum-income.v1";
 const PAYMENT_RECEIPT_SCHEMA_VERSION = "earnproof.payment-receipt.v1";
@@ -217,6 +220,72 @@ export class ProofsService {
       verificationUrl: `/api/v1/proofs/${proof.id}/verify`,
       credential: this.signCredential(credential),
       anchoring: anchorResult ?? { anchored: false, reason: "disabled" },
+    };
+  }
+
+  async listProofs(userId: string, input: ListProofsDto) {
+    const issuedFrom = input.issuedFrom
+      ? new Date(input.issuedFrom)
+      : undefined;
+    const issuedTo = input.issuedTo ? new Date(input.issuedTo) : undefined;
+    if (issuedFrom && issuedTo && issuedFrom > issuedTo) {
+      throw new BadRequestException("issuedFrom must be before issuedTo");
+    }
+
+    if (input.cursor) {
+      const cursor = await this.prisma.proof.findFirst({
+        where: { id: input.cursor, userId },
+        select: { id: true },
+      });
+      if (!cursor) {
+        throw new BadRequestException("Invalid proof cursor");
+      }
+    }
+
+    const limit = input.limit ?? 20;
+    const where: Prisma.ProofWhereInput = {
+      userId,
+      proofType: input.type,
+      status: input.status,
+      assetCode: input.assetCode,
+      createdAt:
+        issuedFrom || issuedTo ? { gte: issuedFrom, lte: issuedTo } : undefined,
+    };
+    const proofs = await this.prisma.proof.findMany({
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: limit + 1,
+      ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : undefined),
+    });
+    const hasMore = proofs.length > limit;
+    const page = hasMore ? proofs.slice(0, limit) : proofs;
+
+    return {
+      data: page.map((proof) => this.toHistoryItem(proof)),
+      pageInfo: {
+        hasMore,
+        nextCursor: hasMore ? (page.at(-1)?.id ?? null) : null,
+      },
+    };
+  }
+
+  async getProofDetail(user: AuthenticatedUser, proofId: string) {
+    const proof = await this.prisma.proof.findFirst({
+      where:
+        user.role === "ADMIN"
+          ? { id: proofId }
+          : { id: proofId, userId: user.id },
+      include: { claim: true },
+    });
+
+    if (!proof) {
+      throw new NotFoundException("Proof not found");
+    }
+
+    return {
+      ...this.toHistoryItem(proof),
+      anchoring: await this.proofAnchoringDetail(proof),
+      claim: this.claimSummary(proof.claim),
     };
   }
 
@@ -869,5 +938,92 @@ export class ProofsService {
     }
 
     return this.verificationEventService.getAggregateStats(proofId);
+  }
+
+  private toHistoryItem(proof: Proof) {
+    const expired = proof.expiresAt <= new Date();
+    return {
+      id: proof.id,
+      type: proof.proofType,
+      schemaVersion: proof.schemaVersion,
+      localStatus: proof.status,
+      credentialValidity: this.credentialValidity(proof, expired),
+      expired,
+      asset: { code: proof.assetCode, issuer: proof.assetIssuer },
+      periodStart: proof.periodStart?.toISOString() ?? null,
+      periodEnd: proof.periodEnd?.toISOString() ?? null,
+      issuedAt: proof.createdAt.toISOString(),
+      expiresAt: proof.expiresAt.toISOString(),
+      revokedAt: proof.revokedAt?.toISOString() ?? null,
+      anchoring: {
+        anchored: Boolean(proof.contractTransactionHash),
+        status: proof.contractTransactionHash ? "recorded" : "not_anchored",
+        ...(proof.contractTransactionHash
+          ? { transactionHash: proof.contractTransactionHash }
+          : undefined),
+        checked: false,
+      },
+    };
+  }
+
+  private credentialValidity(proof: Proof, expired: boolean) {
+    if (proof.status === ProofStatus.REVOKED) return "revoked";
+    if (proof.status === ProofStatus.INVALID) return "invalid";
+    if (proof.status === ProofStatus.EXPIRED || expired) return "expired";
+    return "valid";
+  }
+
+  private claimSummary(claim: ProofClaim | null) {
+    if (!claim) return undefined;
+    const policy = claim.disclosurePolicy as Prisma.JsonObject;
+    const count = policy["qualifyingPaymentCount"];
+
+    return {
+      operator: claim.operator,
+      result: claim.result,
+      ...(typeof count === "number"
+        ? { qualifyingPaymentCount: count }
+        : undefined),
+    };
+  }
+
+  private async proofAnchoringDetail(proof: Proof) {
+    if (!proof.contractTransactionHash) {
+      return { anchored: false, status: "not_anchored", checked: false };
+    }
+
+    if (!this.contractAnchoringService) {
+      return {
+        anchored: true,
+        status: "recorded",
+        transactionHash: proof.contractTransactionHash,
+        checked: false,
+      };
+    }
+
+    try {
+      const contract = await this.contractAnchoringService.getProofStatus(
+        proof.id,
+      );
+      return {
+        anchored: true,
+        status: contract.checked
+          ? contract.revoked
+            ? "revoked"
+            : contract.valid
+              ? "valid"
+              : "invalid"
+          : "unavailable",
+        transactionHash: proof.contractTransactionHash,
+        checked: contract.checked,
+      };
+    } catch {
+      return {
+        anchored: true,
+        status: "unavailable",
+        transactionHash: proof.contractTransactionHash,
+        checked: false,
+      };
+    }
   }
 }
