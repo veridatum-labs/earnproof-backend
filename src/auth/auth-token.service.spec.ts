@@ -1,4 +1,6 @@
 import { ConfigService } from "@nestjs/config";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { AuthTokenService } from "./auth-token.service";
 
 describe("AuthTokenService", () => {
@@ -30,5 +32,19 @@ describe("AuthTokenService", () => {
     });
 
     expect(() => service.verify(`${token}x`)).toThrow("Invalid auth token");
+  });
+
+  it("is not referenced by the active guard or authentication service", () => {
+    const guardSource = readFileSync(
+      join(process.cwd(), "src/common/guards/auth.guard.ts"),
+      "utf8",
+    );
+    const authServiceSource = readFileSync(
+      join(process.cwd(), "src/auth/auth.service.ts"),
+      "utf8",
+    );
+
+    expect(guardSource).not.toContain("AuthTokenService");
+    expect(authServiceSource).not.toContain("AuthTokenService");
   });
 });
