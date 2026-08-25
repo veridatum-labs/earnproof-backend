@@ -72,6 +72,20 @@ enum VerificationOutcome {
   ISSUER_WARNING
 }
 
+enum ApiKeyScope {
+  // Proof verification and reading
+  PROOF_READ
+  PROOF_VERIFY
+  
+  // Payment management and reading
+  PAYMENT_READ
+  PAYMENT_WRITE
+  
+  // Organization management
+  ORG_READ
+  ORG_ADMIN
+}
+
 model User {
   id                 String          @id @default(cuid())
   walletAddress      String          @unique
