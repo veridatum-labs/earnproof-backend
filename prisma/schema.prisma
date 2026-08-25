@@ -63,16 +63,13 @@ enum VerificationResult {
   UNVERIFIED_ISSUER
 }
 
-enum AnchoringOperation {
-  REGISTER
-  REVOKE
-}
-
-enum AnchoringStatus {
-  PENDING
-  PROCESSING
-  CONFIRMED
-  FAILED
+enum VerificationOutcome {
+  VALID
+  EXPIRED
+  REVOKED
+  UNKNOWN
+  INVALID_SIGNATURE
+  ISSUER_WARNING
 }
 
 model User {
@@ -268,6 +265,20 @@ model VerificationEvent {
 
   @@index([proofId, createdAt])
   @@index([result])
+}
+
+model VerificationEventLog {
+  id           String              @id @default(cuid())
+  outcome      VerificationOutcome
+  proofId      String
+  metadataHash String
+  saltVersion  Int
+  createdAt    DateTime            @default(now())
+  retainUntil  DateTime
+
+  @@index([proofId, createdAt])
+  @@index([outcome])
+  @@index([retainUntil])
 }
 
 model ApiKey {

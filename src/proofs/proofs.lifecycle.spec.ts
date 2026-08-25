@@ -5,10 +5,16 @@ import {
   VerificationResult,
 } from "@prisma/client";
 import { ProofsService } from "./proofs.service";
+import { VerificationEventService } from "../audit/verification-event.service";
 
 describe("ProofsService lifecycle", () => {
   it("creates, verifies, revokes, and re-verifies a minimum income proof", async () => {
     const store = createProofStore();
+    const mockVerificationEventService = {
+      recordEvent: jest.fn().mockResolvedValue(undefined),
+      getAggregateStats: jest.fn().mockResolvedValue({}),
+      cleanupExpiredEvents: jest.fn().mockResolvedValue(0),
+    } as unknown as VerificationEventService;
     const service = new ProofsService(store.prisma as never, {
       getOrThrow: jest.fn((key: string) => {
         const values: Record<string, string> = {
@@ -18,13 +24,7 @@ describe("ProofsService lifecycle", () => {
         };
         return values[key];
       }),
-      get: jest.fn((key: string) => {
-        // anchoring disabled in lifecycle test — keeps focus on proof state
-        if (key === "contractAnchoring.enabled") return false;
-        if (key === "contractAnchoring.required") return false;
-        return undefined;
-      }),
-    } as never);
+    } as never, mockVerificationEventService);
     const user = {
       id: "user_lifecycle",
       walletAddress: "GB_TEST",
@@ -117,14 +117,23 @@ function createProofStore() {
         const updated = { ...proof, ...data };
         proofs.set(where.id, updated);
 
-        if (!select) return Promise.resolve(updated);
-        return Promise.resolve(
-          Object.keys(select).reduce<Record<string, unknown>>((result, key) => {
-            result[key] = updated[key];
-            return result;
-          }, {}),
-        );
-      }),
+          return Promise.resolve(
+            Object.keys(select).reduce<Record<string, unknown>>((result, key) => {
+              result[key] = updated[key];
+              return result;
+            }, {}),
+          );
+        }),
+      },
+      verificationEvent: {
+        create: jest.fn(({ data }) => {
+          verificationEvents.push(data);
+          return Promise.resolve({ id: `event_${verificationEvents.length}` });
+        }),
+      },
+      verificationEventLog: {
+        create: jest.fn().mockResolvedValue({ id: "event_1" }),
+      },
     },
     verificationEvent: {
       create: jest.fn(({ data }) => {
