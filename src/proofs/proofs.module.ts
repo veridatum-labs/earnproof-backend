@@ -7,8 +7,9 @@ import { ProofsController } from "./proofs.controller";
 import { ProofsService } from "./proofs.service";
 
 @Module({
-  imports: [AuthModule, AuditModule],
+  imports: [AuthModule, AuditModule, WebhooksModule],
   controllers: [ProofsController],
   providers: [ContractAnchoringService, ProofsService],
+  exports: [ContractAnchoringService],
 })
 export class ProofsModule {}

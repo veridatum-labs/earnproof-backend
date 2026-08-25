@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-function-type */
 import { WebhookDeliveryStatus } from "@prisma/client";
 import { encryptProtectedAmount } from "../common/crypto/protected-amount";
 import { WebhookDeliveryService } from "./webhook-delivery.service";
@@ -61,7 +62,7 @@ describe("WebhookDeliveryService", () => {
     it("marks a delivery SUCCESS when the endpoint returns 2xx", async () => {
       const secretEncrypted = makeEncryptedSecret();
       const deliveries = new Map<string, Record<string, unknown>>();
-      let deliveryId = "delivery_1";
+      const deliveryId = "delivery_1";
 
       const prisma = buildPrisma(deliveries, [
         { id: "webhook_1", url: "https://example.com/hook", secretEncrypted, status: "ACTIVE" },
@@ -377,7 +378,7 @@ describe("WebhookDeliveryService", () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         status: 200,
-        text: async () => "ok",
+        text: async () => '{"token":"integrator-secret","ok":true}',
       }) as unknown as typeof fetch;
 
       const service = new WebhookDeliveryService(
@@ -398,7 +399,8 @@ describe("WebhookDeliveryService", () => {
 
       // Raw secret must not appear in the stored delivery row
       expect(rowJson).not.toContain(RAW_SECRET);
-      // Encrypted form is fine (it's opaque)
+      expect(rowJson).not.toContain("integrator-secret");
+      expect(rowJson).toContain("[REDACTED]");
     });
 
     it("truncates large response bodies to 1024 characters", async () => {
@@ -461,7 +463,6 @@ describe("WebhookDeliveryService", () => {
   // -------------------------------------------------------------------------
   describe("secret rotation", () => {
     it("uses the current encrypted secret at execution time, not at enqueue time", async () => {
-      const originalSecret = encryptProtectedAmount("old-secret", ENCRYPTION_KEY);
       const newSecret = encryptProtectedAmount("new-secret", ENCRYPTION_KEY);
 
       const deliveries = new Map<string, Record<string, unknown>>();
@@ -541,6 +542,7 @@ describe("WebhookDeliveryService", () => {
         webhookId: "webhook_1",
         eventType: "proof.created",
         eventId: "event_replay",
+        payload: makeEnvelope({ id: "event_replay" }),
         attempt: 1,
         status: WebhookDeliveryStatus.FAILED,
         replayOf: null,
@@ -572,6 +574,10 @@ describe("WebhookDeliveryService", () => {
       expect(replayRow.replayedBy).toBe("user_admin");
       expect(replayRow.eventId).toBe("event_replay"); // same eventId → integrator deduplicates
       expect(replayRow.attempt).toBe(1);
+
+      const repeatedId = await service.replay(originalId, "user_admin");
+      expect(repeatedId).toBe(newId);
+      expect(deliveries.size).toBe(2);
     });
 
     it("rejects replay for a disabled webhook endpoint", async () => {
@@ -659,8 +665,12 @@ function buildPrisma(
           })),
         );
       }),
-      findUnique: jest.fn(({ where, include }: { where: { id: string }; include?: unknown }) => {
-        const row = deliveries.get(where.id);
+      findUnique: jest.fn(({ where, include }: { where: { id?: string; replayKey?: string }; include?: unknown }) => {
+        const row = where.id
+          ? deliveries.get(where.id)
+          : [...deliveries.values()].find(
+              (delivery) => delivery.replayKey === where.replayKey,
+            );
         if (!row) return Promise.resolve(null);
         const withWebhook = include
           ? {

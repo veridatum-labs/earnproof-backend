@@ -8,7 +8,7 @@ import { Keypair, StrKey } from "@stellar/stellar-base";
 import { createHash, randomBytes } from "crypto";
 import { PrismaService } from "../database/prisma.service";
 import { sha256 } from "../common/crypto/hash";
-import { AuthTokenService } from "./auth-token.service";
+import { SessionService } from "./session.service";
 
 @Injectable()
 export class AuthService {
@@ -17,7 +17,7 @@ export class AuthService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly authTokenService: AuthTokenService,
+    private readonly sessionService: SessionService,
     configService: ConfigService,
   ) {
     this.appUrl = configService.getOrThrow<string>("appUrl");
@@ -69,9 +69,7 @@ export class AuthService {
         id: input.challengeId,
         walletAddress: input.walletAddress,
         usedAt: null,
-        expiresAt: {
-          gt: new Date(),
-        },
+        expiresAt: { gt: new Date() },
       },
     });
 
@@ -91,13 +89,8 @@ export class AuthService {
 
     const walletHash = `sha256:${sha256(input.walletAddress)}`;
     const user = await this.prisma.user.upsert({
-      where: {
-        walletAddress: input.walletAddress,
-      },
-      update: {
-        walletHash,
-        lastLoginAt: new Date(),
-      },
+      where: { walletAddress: input.walletAddress },
+      update: { walletHash, lastLoginAt: new Date() },
       create: {
         walletAddress: input.walletAddress,
         walletHash,
@@ -105,16 +98,15 @@ export class AuthService {
       },
     });
 
+    // Mark challenge as consumed before issuing a session so that a crash
+    // between the two writes leaves no valid challenge open.
     await this.prisma.walletChallenge.update({
-      where: {
-        id: challenge.id,
-      },
-      data: {
-        usedAt: new Date(),
-      },
+      where: { id: challenge.id },
+      data: { usedAt: new Date() },
     });
 
-    const token = this.authTokenService.sign({
+    // Create a persisted, revocable session.  Only the hash is stored.
+    const { token, sessionId, expiresAt } = await this.sessionService.create({
       id: user.id,
       walletAddress: user.walletAddress,
       walletHash: user.walletHash,
@@ -131,15 +123,15 @@ export class AuthService {
       session: {
         token,
         tokenType: "Bearer",
+        sessionId,
+        expiresAt,
       },
     };
   }
 
   async getSession(userId: string) {
     const user = await this.prisma.user.findUnique({
-      where: {
-        id: userId,
-      },
+      where: { id: userId },
       select: {
         id: true,
         walletAddress: true,
@@ -156,6 +148,19 @@ export class AuthService {
 
     return { user };
   }
+
+  /**
+   * Revoke the caller's active session server-side.
+   * The sessionId is extracted from the authenticated request context by
+   * the controller — the raw token is never passed here.
+   */
+  async logout(sessionId: string): Promise<void> {
+    await this.sessionService.revoke(sessionId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private helpers
+  // ---------------------------------------------------------------------------
 
   private verifySignature(
     walletAddress: string,
@@ -180,7 +185,6 @@ export class AuthService {
     if (/^[a-f0-9]+$/i.test(signature) && signature.length % 2 === 0) {
       return Buffer.from(signature, "hex");
     }
-
     return Buffer.from(signature, "base64");
   }
 

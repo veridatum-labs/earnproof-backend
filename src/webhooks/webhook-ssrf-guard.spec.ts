@@ -1,4 +1,8 @@
-import { SsrfBlockedError, assertSafeWebhookUrl } from "./webhook-ssrf-guard";
+import {
+  SsrfBlockedError,
+  assertSafeWebhookDestination,
+  assertSafeWebhookUrl,
+} from "./webhook-ssrf-guard";
 
 describe("assertSafeWebhookUrl", () => {
   const allow = (url: string) =>
@@ -89,5 +93,35 @@ describe("assertSafeWebhookUrl", () => {
   describe("does not allow safe-looking URL targeting a public host", () => {
     it("allows a legitimate HTTPS public URL", () =>
       allow("https://webhooks.example.com/v1/earn"));
+  });
+});
+
+describe("assertSafeWebhookDestination", () => {
+  it("blocks a public-looking hostname when DNS resolves to a private IP", async () => {
+    const resolve = jest.fn().mockResolvedValue([
+      { address: "93.184.216.34", family: 4 },
+      { address: "169.254.169.254", family: 4 },
+    ]);
+
+    await expect(
+      assertSafeWebhookDestination(
+        "https://hooks.example.com/event",
+        resolve as never,
+      ),
+    ).rejects.toThrow(SsrfBlockedError);
+  });
+
+  it("accepts a hostname only when every resolved address is public", async () => {
+    const resolve = jest.fn().mockResolvedValue([
+      { address: "93.184.216.34", family: 4 },
+      { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 },
+    ]);
+
+    await expect(
+      assertSafeWebhookDestination(
+        "https://hooks.example.com/event",
+        resolve as never,
+      ),
+    ).resolves.toBeUndefined();
   });
 });

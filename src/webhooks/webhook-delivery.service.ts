@@ -1,12 +1,15 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { WebhookDeliveryStatus } from "@prisma/client";
+import { Prisma, WebhookDeliveryStatus } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { decryptProtectedAmount } from "../common/crypto/protected-amount";
 import { PrismaService } from "../database/prisma.service";
 import { WebhookEnvelope, WebhookEventType } from "./webhook-event.types";
 import { WebhookSigningService } from "./webhook-signing.service";
-import { SsrfBlockedError, assertSafeWebhookUrl } from "./webhook-ssrf-guard";
+import {
+  SsrfBlockedError,
+  assertSafeWebhookDestination,
+} from "./webhook-ssrf-guard";
 
 /** Maximum stored response body size in bytes (1 KiB). */
 const MAX_RESPONSE_BODY_BYTES = 1024;
@@ -140,13 +143,14 @@ export class WebhookDeliveryService implements OnModuleInit {
           webhookId: hook.id,
           eventType,
           eventId,
+          payload: fullEnvelope as unknown as Prisma.InputJsonValue,
           attempt: 1,
           status: WebhookDeliveryStatus.PENDING,
         },
         select: { id: true },
       });
 
-      this.scheduleDelivery(delivery.id, hook.id, 0, fullEnvelope, hook.url, hook.secretEncrypted);
+      this.scheduleDelivery(delivery.id, hook.id, 0, fullEnvelope);
     }
   }
 
@@ -183,6 +187,13 @@ export class WebhookDeliveryService implements OnModuleInit {
       throw new Error("Cannot replay delivery for a disabled webhook endpoint");
     }
 
+    const replayKey = `${originalDeliveryId}:${replayedBy}`;
+    const existingReplay = await this.prisma.webhookDelivery.findUnique({
+      where: { replayKey },
+      select: { id: true },
+    });
+    if (existingReplay) return existingReplay.id;
+
     // Replay is idempotent per (originalDeliveryId, replayedBy): re-using
     // the same eventId in the envelope means integrators can deduplicate on
     // X-EarnProof-Delivery just like they do for normal retries.
@@ -190,11 +201,13 @@ export class WebhookDeliveryService implements OnModuleInit {
       data: {
         webhookId: original.webhookId,
         eventType: original.eventType,
+        payload: original.payload as Prisma.InputJsonValue,
         eventId: original.eventId, // same eventId → integrator deduplicates
         attempt: 1,
         status: WebhookDeliveryStatus.PENDING,
         replayOf: originalDeliveryId,
         replayedBy,
+        replayKey,
       },
       select: { id: true },
     });
@@ -221,8 +234,6 @@ export class WebhookDeliveryService implements OnModuleInit {
     webhookId: string,
     delayMs: number,
     envelope?: WebhookEnvelope,
-    url?: string,
-    secretEncrypted?: string,
   ): void {
     const existing = this.chains.get(webhookId);
     const tail = existing?.tail ?? Promise.resolve();
@@ -232,7 +243,13 @@ export class WebhookDeliveryService implements OnModuleInit {
         new Promise<void>((resolve) => {
           setTimeout(async () => {
             try {
-              await this.runDelivery(deliveryId, envelope, url, secretEncrypted);
+              await this.runDelivery(
+                deliveryId,
+                envelope,
+                undefined,
+                undefined,
+                true,
+              );
             } catch {
               // runDelivery swallows its own errors and logs them;
               // we must not let an uncaught rejection break the chain.
@@ -252,8 +269,9 @@ export class WebhookDeliveryService implements OnModuleInit {
   private async runDelivery(
     deliveryId: string,
     cachedEnvelope?: WebhookEnvelope,
-    cachedUrl?: string,
-    cachedSecretEncrypted?: string,
+    _cachedUrl?: string,
+    _cachedSecretEncrypted?: string,
+    holdAggregateQueue = false,
   ): Promise<void> {
     const delivery = await this.prisma.webhookDelivery.findUnique({
       where: { id: deliveryId },
@@ -286,8 +304,8 @@ export class WebhookDeliveryService implements OnModuleInit {
       return;
     }
 
-    const url = cachedUrl ?? delivery.webhook.url;
-    const secretEncrypted = cachedSecretEncrypted ?? delivery.webhook.secretEncrypted;
+    const url = delivery.webhook.url;
+    const secretEncrypted = delivery.webhook.secretEncrypted;
 
     // Decrypt signing secret — never stored in plain text or in delivery logs.
     let signingSecret: string;
@@ -307,17 +325,9 @@ export class WebhookDeliveryService implements OnModuleInit {
       return;
     }
 
-    // Build the envelope if not cached (e.g. after a restart).
-    // We do not re-fetch the original event data; the eventId + eventType
-    // stored on the delivery is enough for the integrator to identify it.
-    // For a full payload, pass the envelope at enqueue time (first attempt).
-    const envelope: WebhookEnvelope = cachedEnvelope ?? {
-      specVersion: "1",
-      id: delivery.eventId,
-      event: delivery.eventType as WebhookEventType,
-      createdAt: delivery.createdAt.toISOString(),
-      data: {} as never, // payload unavailable after restart; integrator sees eventId
-    };
+    // The full public payload is persisted, so retries and crash recovery
+    // deliver exactly the same signed event rather than an empty envelope.
+    const envelope = (cachedEnvelope ?? delivery.payload) as WebhookEnvelope;
 
     const body = JSON.stringify(envelope);
     const timestamp = Math.floor(Date.now() / 1000);
@@ -332,7 +342,7 @@ export class WebhookDeliveryService implements OnModuleInit {
 
     const start = Date.now();
     try {
-      assertSafeWebhookUrl(url);
+      await assertSafeWebhookDestination(url);
 
       const response = await fetch(url, {
         method: "POST",
@@ -354,7 +364,7 @@ export class WebhookDeliveryService implements OnModuleInit {
       statusCode = response.status;
 
       // Truncate response body to prevent large payloads in logs.
-      const rawText = await response.text();
+      const rawText = redactSensitiveResponse(await response.text());
       responseBody = rawText.length > MAX_RESPONSE_BODY_BYTES
         ? rawText.slice(0, MAX_RESPONSE_BODY_BYTES) + "…[truncated]"
         : rawText;
@@ -380,7 +390,10 @@ export class WebhookDeliveryService implements OnModuleInit {
         this.logger.warn(`Delivery ${deliveryId} blocked by SSRF guard: ${failureReason}`);
         return;
       }
-      failureReason = err instanceof Error ? err.message : String(err);
+      failureReason =
+        err instanceof Error && err.name === "TimeoutError"
+          ? "delivery request timed out"
+          : "delivery request failed";
     }
 
     if (success) {
@@ -443,6 +456,7 @@ export class WebhookDeliveryService implements OnModuleInit {
       data: {
         webhookId: delivery.webhookId,
         eventType: delivery.eventType,
+        payload: delivery.payload as Prisma.InputJsonValue,
         eventId: delivery.eventId, // same eventId across all retries
         attempt: nextAttempt,
         status: WebhookDeliveryStatus.PENDING,
@@ -456,15 +470,20 @@ export class WebhookDeliveryService implements OnModuleInit {
       `Delivery ${deliveryId} failed (attempt ${delivery.attempt}); retrying as ${retryDelivery.id} in ${delay}ms`,
     );
 
-    // Schedule retry on the same per-webhook chain to preserve ordering.
-    this.scheduleDelivery(
-      retryDelivery.id,
-      delivery.webhookId,
-      delay,
-      cachedEnvelope, // pass through so full payload is available
-      cachedUrl,
-      cachedSecretEncrypted,
-    );
+    if (holdAggregateQueue) {
+      // Keep the production queue occupied through the retry so later events
+      // cannot silently overtake an earlier event for the same aggregate.
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      await this.runDelivery(
+        retryDelivery.id,
+        envelope,
+        undefined,
+        undefined,
+        true,
+      );
+    } else {
+      this.scheduleDelivery(retryDelivery.id, delivery.webhookId, delay, envelope);
+    }
   }
 
   private parseEvents(events: unknown): WebhookEventType[] {
@@ -473,4 +492,13 @@ export class WebhookDeliveryService implements OnModuleInit {
     }
     return [];
   }
+}
+
+function redactSensitiveResponse(value: string): string {
+  return value
+    .replace(
+      /(["']?(?:authorization|password|secret|token|api[_-]?key)["']?\s*[:=]\s*["']?)[^"'\s,}]*/gi,
+      "$1[REDACTED]",
+    )
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]");
 }

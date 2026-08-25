@@ -9,17 +9,12 @@
  *   - Unroutable / special-use (0.x, 100.64–127.x CGN, ::, fc00::/7)
  *   - Non-HTTPS schemes
  *
- * NOTE: This guard performs a purely syntactic / numeric check on the
- * hostname as it appears in the URL.  It does NOT perform a DNS lookup,
- * so it does not protect against DNS-rebinding attacks.  For production
- * deployments, a network-layer egress firewall provides the complementary
- * defence.  Documenting this trade-off is within scope; adding a DNS
- * resolver would expand scope.
- *
  * Redirects: the fetch call uses `redirect: "error"` so any 3xx response
  * is treated as a failure rather than followed — this prevents an open
  * redirect from forwarding a signed payload to an internal address.
  */
+
+import { lookup } from "node:dns/promises";
 
 export class SsrfBlockedError extends Error {
   constructor(reason: string) {
@@ -43,6 +38,9 @@ export function assertSafeWebhookUrl(raw: string): void {
   if (parsed.protocol !== "https:") {
     throw new SsrfBlockedError("only https:// destinations are permitted");
   }
+  if (parsed.username || parsed.password) {
+    throw new SsrfBlockedError("URL credentials are not permitted");
+  }
 
   const host = parsed.hostname.toLowerCase();
 
@@ -51,6 +49,34 @@ export function assertSafeWebhookUrl(raw: string): void {
 
   if (isBlockedHost(bare)) {
     throw new SsrfBlockedError(`destination ${bare} is not routable`);
+  }
+}
+
+/**
+ * Resolve a hostname immediately before delivery and reject it when any
+ * returned address is non-public. Checking every A/AAAA result prevents a
+ * hostname from hiding an internal destination behind a public answer.
+ */
+export async function assertSafeWebhookDestination(
+  raw: string,
+  resolve: typeof lookup = lookup,
+): Promise<void> {
+  assertSafeWebhookUrl(raw);
+  const parsed = new URL(raw);
+  const host = parsed.hostname.replace(/^\[|\]$/g, "");
+
+  if (parseIPv4(host) !== null || parseIPv6(host) !== null) return;
+
+  const addresses = await resolve(host, { all: true, verbatim: true });
+  if (addresses.length === 0) {
+    throw new Error("Webhook destination did not resolve");
+  }
+  for (const { address } of addresses) {
+    if (isBlockedHost(address)) {
+      throw new SsrfBlockedError(
+        `destination ${host} resolved to a non-public address`,
+      );
+    }
   }
 }
 
