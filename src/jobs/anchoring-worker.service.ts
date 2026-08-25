@@ -178,29 +178,36 @@ export class AnchoringWorkerService {
         updatedAt: Date;
       }>
     >`
-      UPDATE "AnchoringIntent"
+      WITH candidates AS (
+        SELECT id
+        FROM "AnchoringIntent"
+        WHERE
+          status = ${AnchoringStatus.PENDING}::"AnchoringStatus"
+          AND ("nextRetryAt" IS NULL OR "nextRetryAt" <= ${now})
+        ORDER BY "createdAt" ASC
+        LIMIT ${BATCH_SIZE}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "AnchoringIntent" AS intent
       SET
-        status = ${AnchoringStatus.PROCESSING},
+        status = ${AnchoringStatus.PROCESSING}::"AnchoringStatus",
         "lastAttemptAt" = ${now}
-      WHERE
-        status = ${AnchoringStatus.PENDING}
-        AND ("nextRetryAt" IS NULL OR "nextRetryAt" <= ${now})
-      ORDER BY "createdAt" ASC
-      LIMIT ${BATCH_SIZE}
+      FROM candidates
+      WHERE intent.id = candidates.id
       RETURNING
-        id,
-        "proofId",
-        operation,
-        status,
-        "attemptCount",
-        "lastAttemptAt",
-        "nextRetryAt",
-        "transactionHash",
-        ledger,
-        "lastErrorSafe",
-        "permanentError",
-        "createdAt",
-        "updatedAt"
+        intent.id,
+        intent."proofId",
+        intent.operation,
+        intent.status,
+        intent."attemptCount",
+        intent."lastAttemptAt",
+        intent."nextRetryAt",
+        intent."transactionHash",
+        intent.ledger,
+        intent."lastErrorSafe",
+        intent."permanentError",
+        intent."createdAt",
+        intent."updatedAt"
     `;
 
     // Fetch the full intent records (including proof data) for execution.

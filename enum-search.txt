@@ -1,7 +1,0 @@
-﻿
-prisma\schema.prisma:334:  operation       
-AnchoringOperation
-prisma\schema.prisma:335:  status          
-AnchoringStatus    @default(PENDING)
-
-

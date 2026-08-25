@@ -2,12 +2,10 @@
 DROP INDEX "AnchoringIntent_status_nextRetryAt_idx";
 DROP INDEX "AnchoringIntent_proofId_operation_idx";
 
--- Create new partial unique constraint to prevent double-claim:
--- Only one PROCESSING or CONFIRMED intent per (proofId, operation) pair.
--- This enforces that the same operation cannot be claimed/executed twice for a proof.
-CREATE UNIQUE INDEX "AnchoringIntent_proofId_operation_unique_claim_idx" 
-  ON "AnchoringIntent"("proofId", "operation") 
-  WHERE "status" IN ('PROCESSING', 'CONFIRMED');
+-- One durable lifecycle record exists for each proof operation. This prevents
+-- duplicate PENDING deliveries as well as concurrent execution after restart.
+CREATE UNIQUE INDEX "AnchoringIntent_proofId_operation_key"
+  ON "AnchoringIntent"("proofId", "operation");
 
 -- Create supporting indexes for query performance
 CREATE INDEX "AnchoringIntent_nextRetryAt_idx" ON "AnchoringIntent"("nextRetryAt");

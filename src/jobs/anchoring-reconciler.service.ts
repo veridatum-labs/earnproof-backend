@@ -158,23 +158,38 @@ export class AnchoringReconcilerService {
   }
 
   private async enqueueRevoke(proofId: string): Promise<void> {
-    // Avoid duplicate PENDING revoke intents.
     const existing = await this.prisma.anchoringIntent.findFirst({
       where: {
         proofId,
         operation: AnchoringOperation.REVOKE,
-        status: { in: [AnchoringStatus.PENDING, AnchoringStatus.PROCESSING] },
       },
     });
 
-    if (existing) return;
+    if (
+      existing?.status === AnchoringStatus.PENDING ||
+      existing?.status === AnchoringStatus.PROCESSING
+    ) {
+      return;
+    }
 
-    await this.prisma.anchoringIntent.create({
-      data: {
-        proofId,
-        operation: AnchoringOperation.REVOKE,
-        status: AnchoringStatus.PENDING,
-      },
-    });
+    if (existing) {
+      await this.prisma.anchoringIntent.update({
+        where: { id: existing.id },
+        data: {
+          status: AnchoringStatus.PENDING,
+          permanentError: false,
+          lastErrorSafe: null,
+          nextRetryAt: new Date(),
+        },
+      });
+    } else {
+      await this.prisma.anchoringIntent.create({
+        data: {
+          proofId,
+          operation: AnchoringOperation.REVOKE,
+          status: AnchoringStatus.PENDING,
+        },
+      });
+    }
   }
 }

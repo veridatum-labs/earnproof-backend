@@ -23,6 +23,7 @@ function makePrisma() {
     anchoringIntent: {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({}),
+      update: jest.fn().mockResolvedValue({}),
     },
   };
 }
