@@ -1,0 +1,261 @@
+import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { randomBytes } from "crypto";
+import { PrismaService } from "../database/prisma.service";
+import { sha256 } from "../common/crypto/hash";
+import { AuthenticatedUser } from "./auth.types";
+
+/** Default session TTL: 12 hours in seconds. */
+const DEFAULT_TTL_SECONDS = 60 * 60 * 12;
+
+/**
+ * How the opaque token is structured (internal only).
+ *
+ * Format: `<sessionId>.<32-byte-random-hex>`
+ *
+ * The full string is what we hand to the client as a Bearer token.
+ * We store only `sha256(<fullToken>)` in the database — the raw token
+ * is never persisted or logged.
+ */
+
+@Injectable()
+export class SessionService {
+  private readonly sessionTtlSeconds: number;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    configService: ConfigService,
+  ) {
+    // Re-use the existing SESSION_SECRET env var to confirm the config is
+    // present; actual token confidentiality comes from the random bytes,
+    // not from HMAC signing.
+    configService.getOrThrow<string>("sessionSecret");
+    this.sessionTtlSeconds = DEFAULT_TTL_SECONDS;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Public API
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Create a new persisted session for `user` and return the opaque token.
+   * The token is never stored — only its SHA-256 hash is persisted.
+   */
+  async create(
+    user: AuthenticatedUser,
+    ttlSeconds = this.sessionTtlSeconds,
+  ): Promise<{ token: string; sessionId: string; expiresAt: Date }> {
+    const { token, tokenHash, sessionId } = this.generateToken();
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+
+    await this.prisma.authSession.create({
+      data: {
+        id: sessionId,
+        tokenHash,
+        userId: user.id,
+        expiresAt,
+      },
+    });
+
+    return { token, sessionId, expiresAt };
+  }
+
+  /**
+   * Validate a Bearer token string.
+   *
+   * Rejects:
+   *  - malformed tokens (wrong format)
+   *  - tokens whose session row is missing
+   *  - expired sessions (`expiresAt` in the past)
+   *  - revoked sessions (`revokedAt` is set)
+   *
+   * On success updates `lastUsedAt` and returns the session id + userId.
+   */
+  async validate(
+    token: string,
+  ): Promise<{ sessionId: string; userId: string }> {
+    const tokenHash = this.hashToken(token);
+    if (!tokenHash) {
+      throw new UnauthorizedException("Malformed session token");
+    }
+
+    const session = await this.prisma.authSession.findUnique({
+      where: { tokenHash },
+      select: {
+        id: true,
+        userId: true,
+        expiresAt: true,
+        revokedAt: true,
+      },
+    });
+
+    if (!session) {
+      throw new UnauthorizedException("Session not found");
+    }
+
+    if (session.revokedAt !== null) {
+      throw new UnauthorizedException("Session has been revoked");
+    }
+
+    if (session.expiresAt <= new Date()) {
+      throw new UnauthorizedException("Session has expired");
+    }
+
+    // Fire-and-forget lastUsedAt update — failure is non-fatal.
+    this.prisma.authSession
+      .update({
+        where: { id: session.id },
+        data: { lastUsedAt: new Date() },
+      })
+      .catch(() => {
+        // Deliberately swallowed: a failed timestamp update must not break
+        // in-flight requests.
+      });
+
+    return { sessionId: session.id, userId: session.userId };
+  }
+
+  /**
+   * Revoke a single session by its database id.
+   * Idempotent — revoking an already-revoked session is a no-op.
+   *
+   * @param sessionId  The AuthSession.id (NOT the raw token).
+   */
+  async revoke(sessionId: string): Promise<void> {
+    await this.prisma.authSession.updateMany({
+      where: {
+        id: sessionId,
+        revokedAt: null, // idempotent guard
+      },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  /**
+   * Rotate a session: atomically revoke the current session and issue a fresh
+   * one with a new token.  The old session's `rotatedToId` is set to the new
+   * session id, making the rotation chain queryable.
+   *
+   * If `sessionId` is already revoked, throws `UnauthorizedException` to
+   * prevent reuse of rotated credentials.
+   *
+   * @returns  The new opaque token and its metadata.
+   */
+  async rotate(
+    sessionId: string,
+    user: AuthenticatedUser,
+    ttlSeconds = this.sessionTtlSeconds,
+  ): Promise<{ token: string; sessionId: string; expiresAt: Date }> {
+    const { token, tokenHash, sessionId: newSessionId } = this.generateToken();
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+
+    await this.prisma.$transaction(async (transaction) => {
+      const existing = await transaction.authSession.findUnique({
+        where: { id: sessionId },
+        select: { userId: true, revokedAt: true, expiresAt: true },
+      });
+
+      if (!existing || existing.userId !== user.id) {
+        throw new UnauthorizedException("Session not found");
+      }
+
+      if (existing.revokedAt !== null) {
+        throw new UnauthorizedException(
+          "Cannot rotate an already-revoked session",
+        );
+      }
+
+      if (existing.expiresAt <= new Date()) {
+        throw new UnauthorizedException("Session has expired");
+      }
+
+      await transaction.authSession.create({
+        data: {
+          id: newSessionId,
+          tokenHash,
+          userId: user.id,
+          expiresAt,
+        },
+      });
+
+      const revoked = await transaction.authSession.updateMany({
+        where: { id: sessionId, userId: user.id, revokedAt: null },
+        data: {
+          revokedAt: new Date(),
+          rotatedToId: newSessionId,
+        },
+      });
+
+      if (revoked.count !== 1) {
+        throw new UnauthorizedException(
+          "Cannot rotate an already-revoked session",
+        );
+      }
+    });
+
+    return { token, sessionId: newSessionId, expiresAt };
+  }
+
+  /**
+   * Revoke all active sessions for a user (e.g. "logout everywhere").
+   */
+  async revokeAll(userId: string): Promise<void> {
+    await this.prisma.authSession.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+      },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  /**
+   * Delete session rows that expired before `olderThan` (defaults to now).
+   * Intended to be called by a scheduled cleanup job.
+   *
+   * @returns  Number of rows deleted.
+   */
+  async deleteExpired(olderThan: Date = new Date()): Promise<number> {
+    const result = await this.prisma.authSession.deleteMany({
+      where: { expiresAt: { lt: olderThan } },
+    });
+    return result.count;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Generate a cryptographically random opaque token and its SHA-256 hash.
+   *
+   * Token format: `<cuid-style-id>.<32-random-bytes-hex>`
+   * The id segment is also used as the database primary key so we avoid a
+   * round-trip SELECT after INSERT.
+   */
+  private generateToken(): {
+    token: string;
+    tokenHash: string;
+    sessionId: string;
+  } {
+    // 32 random bytes → 64-char hex string (256 bits of entropy)
+    const secret = randomBytes(32).toString("hex");
+    // Use a separate random id segment so the session id alone does not allow
+    // constructing a valid token (the secret part is still required).
+    const sessionId = randomBytes(12).toString("base64url");
+    const token = `${sessionId}.${secret}`;
+    const tokenHash = sha256(token);
+    return { token, tokenHash, sessionId };
+  }
+
+  /**
+   * Hash an arbitrary token string for database lookup.
+   * Returns `null` for obviously malformed inputs (missing `.` separator).
+   */
+  private hashToken(token: string): string | null {
+    if (!/^[A-Za-z0-9_-]{16}\.[a-f0-9]{64}$/.test(token)) {
+      return null;
+    }
+    return sha256(token);
+  }
+}
