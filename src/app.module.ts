@@ -1,6 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
-import { ApiKeysModule } from "./api-keys/api-keys.module";
+import { AuditModule } from "./audit/audit.module";
 import { AuthModule } from "./auth/auth.module";
 import { configuration } from "./config/configuration";
 import { validateEnv } from "./config/env.validation";
@@ -17,7 +17,7 @@ import { ProofsModule } from "./proofs/proofs.module";
       validate: validateEnv,
     }),
     DatabaseModule,
-    ApiKeysModule,
+    AuditModule,
     AuthModule,
     HealthModule,
     PaymentsModule,
