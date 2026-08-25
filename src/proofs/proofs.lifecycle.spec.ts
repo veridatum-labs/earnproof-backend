@@ -117,14 +117,13 @@ function createProofStore() {
         const updated = { ...proof, ...data };
         proofs.set(where.id, updated);
 
-          return Promise.resolve(
-            Object.keys(select).reduce<Record<string, unknown>>((result, key) => {
-              result[key] = updated[key];
-              return result;
-            }, {}),
-          );
-        }),
-      },
+        return Promise.resolve(
+          Object.keys(select).reduce<Record<string, unknown>>((result, key) => {
+            result[key] = updated[key];
+            return result;
+          }, {}),
+        );
+      }),
       verificationEvent: {
         create: jest.fn(({ data }) => {
           verificationEvents.push(data);
