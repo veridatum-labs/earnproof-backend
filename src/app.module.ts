@@ -8,6 +8,7 @@ import { configuration } from "./config/configuration";
 import { validateEnv } from "./config/env.validation";
 import { DatabaseModule } from "./database/database.module";
 import { HealthModule } from "./health/health.module";
+import { JobsModule } from "./jobs/jobs.module";
 import { IssuersModule } from "./issuers/issuers.module";
 import { OrganizationsModule } from "./organizations/organizations.module";
 import { PaymentsModule } from "./payments/payments.module";
@@ -30,6 +31,7 @@ import { ProofsModule } from "./proofs/proofs.module";
     IssuersModule,
     PaymentsModule,
     ProofsModule,
+    JobsModule,
   ],
 })
 export class AppModule {}

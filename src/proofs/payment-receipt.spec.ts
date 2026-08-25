@@ -38,6 +38,7 @@ describe("ProofsService payment-receipt proofs", () => {
     occurredAt: new Date("2026-08-01T12:00:00.000Z"),
   };
   const config = {
+    get: jest.fn().mockReturnValue(false),
     getOrThrow: jest.fn((key: string) => {
       const values: Record<string, string> = {
         credentialSigningSecret: "test-signing-secret",
@@ -57,7 +58,7 @@ describe("ProofsService payment-receipt proofs", () => {
     contract?: Record<string, jest.Mock>,
   ) {
     let storedProof: any;
-    const prisma = {
+    const prisma: any = {
       payment: {
         findFirst: jest.fn().mockResolvedValue(selectedPayment),
       },
@@ -90,10 +91,18 @@ describe("ProofsService payment-receipt proofs", () => {
         }),
       },
       verificationEvent: { create: jest.fn().mockResolvedValue({}) },
+      anchoringIntent: { create: jest.fn().mockResolvedValue({}) },
+    };
+    prisma.$transaction = jest.fn(async (callback) => callback(prisma));
+    const harnessConfig = {
+      ...config,
+      get: jest.fn((key: string) =>
+        key === "contractAnchoring.enabled" ? Boolean(contract) : false,
+      ),
     };
     const service = new ProofsService(
       prisma as never,
-      config as never,
+      harnessConfig as never,
       events as never,
       contract as never,
     );
@@ -260,7 +269,7 @@ describe("ProofsService payment-receipt proofs", () => {
     });
   });
 
-  it("anchors issuance and revokes the same receipt proof", async () => {
+  it("enqueues issuance and revocation without calling the contract inline", async () => {
     const contract = {
       anchorProof: jest
         .fn()
@@ -270,19 +279,35 @@ describe("ProofsService payment-receipt proofs", () => {
         .mockResolvedValue({ anchored: true, transactionHash: "revoke_tx" }),
       getProofStatus: jest.fn(),
     };
-    const { service, getStoredProof } = harness(payment, contract);
+    const { service, prisma, getStoredProof } = harness(payment, contract);
     const created = await service.createPaymentReceiptProof(user, {
       paymentId: "payment_1",
     });
 
     expect(created.anchoring).toEqual({
-      anchored: true,
-      transactionHash: "anchor_tx",
+      anchored: false,
+      reason: "pending",
     });
-    expect(getStoredProof().contractTransactionHash).toBe("anchor_tx");
+    expect(contract.anchorProof).not.toHaveBeenCalled();
+    expect(prisma.anchoringIntent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        proofId: created.proofId,
+        operation: "REGISTER",
+        status: "PENDING",
+      }),
+    });
+
+    getStoredProof().contractTransactionHash = "anchor_tx";
 
     const revoked = await service.revokeProof(user.id, created.proofId);
     expect(revoked.status).toBe(ProofStatus.REVOKED);
-    expect(contract.revokeProof).toHaveBeenCalledWith(created.proofId);
+    expect(contract.revokeProof).not.toHaveBeenCalled();
+    expect(prisma.anchoringIntent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        proofId: created.proofId,
+        operation: "REVOKE",
+        status: "PENDING",
+      }),
+    });
   });
 });

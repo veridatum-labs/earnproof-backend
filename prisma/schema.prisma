@@ -72,6 +72,16 @@ enum VerificationOutcome {
   ISSUER_WARNING
 }
 
+enum AnchoringOperation {
+  REGISTER
+  REVOKE
+}
+
+enum AnchoringStatus {
+  PENDING
+  PROCESSING
+  CONFIRMED
+  FAILED
 enum ApiKeyScope {
   // Proof verification and reading
   PROOF_READ
@@ -260,6 +270,7 @@ model Proof {
   updatedAt               DateTime            @updatedAt
   claim                   ProofClaim?
   verificationEvents      VerificationEvent[]
+  anchoringIntents        AnchoringIntent[]
 
   @@index([userId, status])
   @@index([userId, createdAt, id])
@@ -382,4 +393,25 @@ model AuditLog {
   @@index([actorType, actorId])
   @@index([resourceType, resourceId])
   @@index([createdAt])
+}
+
+model AnchoringIntent {
+  id              String             @id @default(cuid())
+  proofId         String
+  proof           Proof              @relation(fields: [proofId], references: [id])
+  operation       AnchoringOperation
+  status          AnchoringStatus    @default(PENDING)
+  attemptCount    Int                @default(0)
+  lastAttemptAt   DateTime?
+  nextRetryAt     DateTime?
+  transactionHash String?
+  ledger          String?
+  lastErrorSafe   String?
+  permanentError  Boolean            @default(false)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@unique([proofId, operation])
+  @@index([nextRetryAt])
+  @@index([proofId])
 }

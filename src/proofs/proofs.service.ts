@@ -2,12 +2,14 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
-  Optional,
   NotFoundException,
+  Optional,
   UnprocessableEntityException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
+  AnchoringOperation,
+  AnchoringStatus,
   PaymentClassification,
   Proof,
   ProofClaim,
@@ -84,6 +86,8 @@ export class ProofsService {
   private readonly signingSecret: string;
   private readonly paymentEncryptionKey: string;
   private readonly stellarNetwork: string;
+  private readonly anchoringEnabled: boolean;
+  private readonly anchoringRequired: boolean;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -99,6 +103,10 @@ export class ProofsService {
       "paymentEncryptionKey",
     );
     this.stellarNetwork = configService.getOrThrow<string>("stellar.network");
+    this.anchoringEnabled =
+      configService.get<boolean>("contractAnchoring.enabled") ?? false;
+    this.anchoringRequired =
+      configService.get<boolean>("contractAnchoring.required") ?? false;
   }
 
   async createPaymentReceiptProof(
@@ -165,61 +173,70 @@ export class ProofsService {
       expiresAt,
     });
     const credentialHash = `sha256:${sha256(this.canonicalize(credential))}`;
+    const commitment = `sha256:${sha256(credentialHash)}`;
 
-    const proof = await this.prisma.proof.create({
-      data: {
-        id: proofId,
-        userId: user.id,
-        proofType: ProofType.PAYMENT_RECEIPT,
-        schemaVersion: PAYMENT_RECEIPT_SCHEMA_VERSION,
-        status: ProofStatus.ACTIVE,
-        network: this.stellarNetwork,
-        assetCode: payment.assetCode,
-        assetIssuer: payment.assetIssuer,
-        periodStart: payment.occurredAt,
-        periodEnd: payment.occurredAt,
-        expiresAt,
-        createdAt: now,
-        credentialHash,
-        commitment: `sha256:${sha256(credentialHash)}`,
-        claim: {
-          create: {
-            operator: "receipt",
-            thresholdEncrypted: amountHidden ? null : payment.amountEncrypted,
-            result: true,
-            disclosurePolicy: {
-              senderHidden,
-              amountHidden,
-              paymentReferenceHash,
-              occurredAt: payment.occurredAt.toISOString(),
-              ...(senderHidden
-                ? undefined
-                : { sourceAddress: payment.sourceAddress }),
+    const proof = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.proof.create({
+        data: {
+          id: proofId,
+          userId: user.id,
+          proofType: ProofType.PAYMENT_RECEIPT,
+          schemaVersion: PAYMENT_RECEIPT_SCHEMA_VERSION,
+          status: ProofStatus.ACTIVE,
+          network: this.stellarNetwork,
+          assetCode: payment.assetCode,
+          assetIssuer: payment.assetIssuer,
+          periodStart: payment.occurredAt,
+          periodEnd: payment.occurredAt,
+          expiresAt,
+          createdAt: now,
+          credentialHash,
+          commitment,
+          claim: {
+            create: {
+              operator: "receipt",
+              thresholdEncrypted: amountHidden
+                ? null
+                : payment.amountEncrypted,
+              result: true,
+              disclosurePolicy: {
+                senderHidden,
+                amountHidden,
+                paymentReferenceHash,
+                occurredAt: payment.occurredAt.toISOString(),
+                ...(senderHidden
+                  ? undefined
+                  : { sourceAddress: payment.sourceAddress }),
+              },
             },
           },
         },
-      },
-      include: { claim: true },
-    });
-    const anchorResult = await this.contractAnchoringService?.anchorProof({
-      proofId: proof.id,
-      commitment: proof.commitment ?? credentialHash,
-      expiresAt: proof.expiresAt,
+        include: { claim: true },
+      });
+
+      if (this.anchoringEnabled) {
+        await tx.anchoringIntent.create({
+          data: {
+            proofId: created.id,
+            operation: AnchoringOperation.REGISTER,
+            status: AnchoringStatus.PENDING,
+          },
+        });
+      }
+
+      return created;
     });
 
-    if (anchorResult?.anchored) {
-      await this.prisma.proof.update({
-        where: { id: proof.id },
-        data: { contractTransactionHash: anchorResult.transactionHash },
-      });
-    }
+    const anchoringResult = this.anchoringEnabled
+      ? { anchored: false as const, reason: "pending" as const }
+      : { anchored: false as const, reason: "disabled" as const };
 
     return {
       proofId: proof.id,
       status: proof.status,
       verificationUrl: `/api/v1/proofs/${proof.id}/verify`,
       credential: this.signCredential(credential),
-      anchoring: anchorResult ?? { anchored: false, reason: "disabled" },
+      anchoring: anchoringResult,
     };
   }
 
@@ -384,39 +401,58 @@ export class ProofsService {
       expiresAt,
     });
     const credentialHash = `sha256:${sha256(this.canonicalize(draftCredential))}`;
+    const commitment = `sha256:${sha256(credentialHash)}`;
 
-    const proof = await this.prisma.proof.create({
-      data: {
-        id: proofId,
-        userId: user.id,
-        proofType: ProofType.MINIMUM_INCOME,
-        schemaVersion: SCHEMA_VERSION,
-        status: ProofStatus.ACTIVE,
-        network: this.stellarNetwork,
-        assetCode: input.assetCode,
-        assetIssuer: input.assetIssuer ?? null,
-        periodStart,
-        periodEnd,
-        expiresAt,
-        createdAt: now,
-        credentialHash,
-        commitment: `sha256:${sha256(credentialHash)}`,
-        claim: {
-          create: {
-            operator: "gte",
-            thresholdEncrypted: this.protectAmount(input.thresholdAmount),
-            result: true,
-            disclosurePolicy: {
-              exactIncomeHidden: true,
-              sourceTransactionsHidden: true,
-              qualifyingPaymentCount: payments.length,
+    // Write Proof + ProofClaim + AnchoringIntent in a single transaction.
+    // The intent is enqueued here (PENDING) even before any external call so
+    // that a crash after this point is recoverable by the worker.
+    const proof = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.proof.create({
+        data: {
+          id: proofId,
+          userId: user.id,
+          proofType: ProofType.MINIMUM_INCOME,
+          schemaVersion: SCHEMA_VERSION,
+          status: ProofStatus.ACTIVE,
+          network: this.stellarNetwork,
+          assetCode: input.assetCode,
+          assetIssuer: input.assetIssuer ?? null,
+          periodStart,
+          periodEnd,
+          expiresAt,
+          createdAt: now,
+          credentialHash,
+          commitment,
+          claim: {
+            create: {
+              operator: "gte",
+              thresholdEncrypted: this.protectAmount(input.thresholdAmount),
+              result: true,
+              disclosurePolicy: {
+                exactIncomeHidden: true,
+                sourceTransactionsHidden: true,
+                qualifyingPaymentCount: payments.length,
+              },
             },
           },
         },
-      },
-      include: {
-        claim: true,
-      },
+        include: {
+          claim: true,
+        },
+      });
+
+      // Only enqueue an anchoring intent when anchoring is configured.
+      if (this.anchoringEnabled) {
+        await tx.anchoringIntent.create({
+          data: {
+            proofId: created.id,
+            operation: AnchoringOperation.REGISTER,
+            status: AnchoringStatus.PENDING,
+          },
+        });
+      }
+
+      return created;
     });
 
     const credential = this.buildCredential({
@@ -431,32 +467,19 @@ export class ProofsService {
       issuedAt: proof.createdAt,
       expiresAt: proof.expiresAt,
     });
-    const anchorResult = await this.contractAnchoringService?.anchorProof({
-      proofId: proof.id,
-      commitment: proof.commitment ?? credentialHash,
-      expiresAt: proof.expiresAt,
-    });
 
-    if (anchorResult?.anchored) {
-      await this.prisma.proof.update({
-        where: {
-          id: proof.id,
-        },
-        data: {
-          contractTransactionHash: anchorResult.transactionHash,
-        },
-      });
-    }
+    // Anchoring is now async (handled by AnchoringWorkerService).
+    // Return a "pending" anchoring status so callers know to poll verify later.
+    const anchoringResult = this.anchoringEnabled
+      ? { anchored: false as const, reason: "pending" as const }
+      : { anchored: false as const, reason: "disabled" as const };
 
     return {
       proofId: proof.id,
       status: proof.status,
       verificationUrl: `/api/v1/proofs/${proof.id}/verify`,
       credential: this.signCredential(credential),
-      anchoring: anchorResult ?? {
-        anchored: false,
-        reason: "disabled",
-      },
+      anchoring: anchoringResult,
     };
   }
 
@@ -481,31 +504,44 @@ export class ProofsService {
       throw new ForbiddenException("Proof does not belong to this user");
     }
 
-    const contractRevocation = proof.contractTransactionHash
-      ? await this.contractAnchoringService?.revokeProof(proof.id)
-      : undefined;
+    // Write local revocation + optional REVOKE anchoring intent atomically.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.proof.update({
+        where: { id: proof.id },
+        data: {
+          status: ProofStatus.REVOKED,
+          revokedAt: new Date(),
+        },
+        select: {
+          id: true,
+          status: true,
+          revokedAt: true,
+        },
+      });
 
-    const updated = await this.prisma.proof.update({
-      where: {
-        id: proof.id,
-      },
-      data: {
-        status: ProofStatus.REVOKED,
-        revokedAt: new Date(),
-      },
-      select: {
-        id: true,
-        status: true,
-        revokedAt: true,
-      },
+      // Only enqueue a REVOKE intent if the proof was previously anchored
+      // on-chain — no on-chain registration means nothing to revoke.
+      if (this.anchoringEnabled && proof.contractTransactionHash) {
+        await tx.anchoringIntent.create({
+          data: {
+            proofId: proof.id,
+            operation: AnchoringOperation.REVOKE,
+            status: AnchoringStatus.PENDING,
+          },
+        });
+      }
+
+      return result;
     });
+
+    const anchoringResult =
+      this.anchoringEnabled && proof.contractTransactionHash
+        ? { anchored: false as const, reason: "pending" as const }
+        : { anchored: false as const, reason: "disabled" as const };
 
     return {
       ...updated,
-      anchoring: contractRevocation ?? {
-        anchored: false,
-        reason: "disabled",
-      },
+      anchoring: anchoringResult,
     };
   }
 
@@ -576,6 +612,18 @@ export class ProofsService {
       result = VerificationResult.EXPIRED;
     } else if (proof.status !== ProofStatus.ACTIVE) {
       result = VerificationResult.INVALID_SIGNATURE;
+    }
+
+    // If required anchoring is enabled and this proof has not yet been
+    // confirmed on-chain, return UNVERIFIED_ISSUER to signal that the proof
+    // is not yet verifiable via the contract. Optional anchoring (or no
+    // anchoring at all) does not block verification.
+    if (
+      result === VerificationResult.VALID &&
+      this.anchoringRequired &&
+      !proof.contractTransactionHash
+    ) {
+      result = VerificationResult.UNVERIFIED_ISSUER;
     }
 
     const contractStatus = proof.contractTransactionHash
