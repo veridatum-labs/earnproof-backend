@@ -15,6 +15,7 @@ import {
 } from "@prisma/client";
 import { createHmac, randomUUID } from "crypto";
 import { AuthenticatedUser } from "../auth/auth.types";
+import { canonicalize } from "../common/crypto/canonicalize";
 import { sha256 } from "../common/crypto/hash";
 import { decryptProtectedAmount } from "../common/crypto/protected-amount";
 import { PrismaService } from "../database/prisma.service";
@@ -161,7 +162,7 @@ export class ProofsService {
       issuedAt: now,
       expiresAt,
     });
-    const credentialHash = `sha256:${sha256(this.canonicalize(draftCredential))}`;
+    const credentialHash = `sha256:${sha256(canonicalize(draftCredential))}`;
 
     const proof = await this.prisma.proof.create({
       data: {
@@ -322,7 +323,7 @@ export class ProofsService {
       expiresAt: proof.expiresAt,
     });
     const signedCredential = this.signCredential(credential);
-    const expectedHash = `sha256:${sha256(this.canonicalize(credential))}`;
+    const expectedHash = `sha256:${sha256(canonicalize(credential))}`;
 
     let result: VerificationResult = VerificationResult.VALID;
     if (proof.credentialHash !== expectedHash) {
@@ -413,7 +414,7 @@ export class ProofsService {
   }
 
   private signCredential(credential: MinimumIncomeCredential) {
-    const canonicalPayload = this.canonicalize(credential);
+    const canonicalPayload = canonicalize(credential);
     return {
       ...credential,
       proof: {
@@ -424,28 +425,6 @@ export class ProofsService {
           .digest("base64url")}`,
       },
     };
-  }
-
-  private canonicalize(value: unknown): string {
-    return JSON.stringify(this.sortObject(value));
-  }
-
-  private sortObject(value: unknown): unknown {
-    if (Array.isArray(value)) {
-      return value.map((item) => this.sortObject(item));
-    }
-
-    if (value && typeof value === "object") {
-      const record = value as Record<string, unknown>;
-      return Object.keys(record)
-        .sort()
-        .reduce<Record<string, unknown>>((sorted, key) => {
-          sorted[key] = this.sortObject(record[key]);
-          return sorted;
-        }, {});
-    }
-
-    return value;
   }
 
   private revealProtectedAmount(amountEncrypted: string | null) {
