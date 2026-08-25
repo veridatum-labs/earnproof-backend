@@ -18,6 +18,7 @@ import { ApiKeyContext } from "../../api-keys/api-key.types";
 export const CurrentApiKey = createParamDecorator(
   (_data: unknown, context: ExecutionContext): ApiKeyContext => {
     const request = context.switchToHttp().getRequest<Request>();
-    return (request as any).apiKeyContext as ApiKeyContext;
+    return (request as Request & { apiKeyContext?: ApiKeyContext })
+      .apiKeyContext as ApiKeyContext;
   },
 );

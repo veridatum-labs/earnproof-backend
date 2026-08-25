@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   UseGuards,
   ForbiddenException,
   BadRequestException,
@@ -21,6 +22,10 @@ import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { ApiKeyService } from "./api-key.service";
 import { PrismaService } from "../database/prisma.service";
+import {
+  CreateApiKeyDto,
+  OrganizationApiKeysQueryDto,
+} from "./dto/api-key-request.dto";
 
 /**
  * API Keys Controller - Machine-to-machine integration credential management.
@@ -87,14 +92,13 @@ export class ApiKeysController {
   async createKey(
     @CurrentUser() user: AuthenticatedUser,
     @Body()
-    body: {
-      name: string;
-      scopes?: ApiKeyScope[];
-      expiresAt?: string;
-    },
+    body: CreateApiKeyDto,
   ) {
     // Authorization: User must be organization admin
-    const organizationId = await this.getUserPrimaryOrganizationId(user.id);
+    const organizationId = await this.getAuthorizedOrganizationId(
+      user,
+      body.organizationId,
+    );
     if (!organizationId) {
       throw new ForbiddenException(
         "Only organization admins can create API keys. You must be the organization creator or an admin member.",
@@ -102,6 +106,9 @@ export class ApiKeysController {
     }
 
     const expiresAt = body.expiresAt ? new Date(body.expiresAt) : undefined;
+    if (expiresAt && expiresAt <= new Date()) {
+      throw new BadRequestException("expiresAt must be in the future");
+    }
 
     // Validate scopes if provided
     if (body.scopes) {
@@ -159,9 +166,15 @@ export class ApiKeysController {
       ],
     },
   })
-  async listKeys(@CurrentUser() user: AuthenticatedUser) {
+  async listKeys(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: OrganizationApiKeysQueryDto = {},
+  ) {
     // Authorization: User must be organization admin
-    const organizationId = await this.getUserPrimaryOrganizationId(user.id);
+    const organizationId = await this.getAuthorizedOrganizationId(
+      user,
+      query.organizationId,
+    );
     if (!organizationId) {
       throw new ForbiddenException(
         "Only organization admins can list API keys. You must be the organization creator or an admin member.",
@@ -219,9 +232,13 @@ export class ApiKeysController {
   async rotateKey(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") keyId: string,
+    @Query() query: OrganizationApiKeysQueryDto = {},
   ) {
     // Authorization: User must be organization admin
-    const organizationId = await this.getUserPrimaryOrganizationId(user.id);
+    const organizationId = await this.getAuthorizedOrganizationId(
+      user,
+      query.organizationId,
+    );
     if (!organizationId) {
       throw new ForbiddenException(
         "Only organization admins can rotate API keys. You must be the organization creator or an admin member.",
@@ -274,9 +291,13 @@ export class ApiKeysController {
   async revokeKey(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") keyId: string,
+    @Query() query: OrganizationApiKeysQueryDto = {},
   ) {
     // Authorization: User must be organization admin
-    const organizationId = await this.getUserPrimaryOrganizationId(user.id);
+    const organizationId = await this.getAuthorizedOrganizationId(
+      user,
+      query.organizationId,
+    );
     if (!organizationId) {
       throw new ForbiddenException(
         "Only organization admins can revoke API keys. You must be the organization creator or an admin member.",
@@ -321,13 +342,14 @@ export class ApiKeysController {
    *
    * @returns organizationId if authorized as admin, null otherwise
    */
-  private async getUserPrimaryOrganizationId(
-    userId: string,
+  private async getAuthorizedOrganizationId(
+    user: AuthenticatedUser,
+    requestedOrganizationId?: string,
   ): Promise<string | null> {
-    // Query for an organization created by this user
     const org = await this.prisma.organization.findFirst({
       where: {
-        createdById: userId,
+        ...(requestedOrganizationId ? { id: requestedOrganizationId } : {}),
+        ...(user.role === "ADMIN" ? {} : { createdById: user.id }),
       },
       select: {
         id: true,

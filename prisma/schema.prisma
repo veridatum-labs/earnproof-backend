@@ -100,7 +100,6 @@ model User {
   trustedSources     TrustedSource[]
   proofs             Proof[]
   createdApiKeys     ApiKey[]
-  auditLogs          AuditLog[]
   sessions           AuthSession[]
 
   @@index([walletHash])
@@ -374,7 +373,6 @@ model AuditLog {
   id           String   @id @default(cuid())
   actorType    String
   actorId      String?
-  actor        User?    @relation(fields: [actorId], references: [id])
   action       String
   resourceType String
   resourceId   String?

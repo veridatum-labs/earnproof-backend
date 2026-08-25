@@ -48,7 +48,9 @@ export class ScopesGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<Request>();
 
     // Get API key context attached by ApiKeyGuard
-    const apiKeyContext = (request as any).apiKeyContext as ApiKeyContext | undefined;
+    const apiKeyContext = (
+      request as Request & { apiKeyContext?: ApiKeyContext }
+    ).apiKeyContext;
 
     if (!apiKeyContext) {
       // No API key context: not authenticated with API key

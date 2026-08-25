@@ -127,6 +127,12 @@ describe("ApiKeyService", () => {
       expect(result1).toBe(false);
       expect(result2).toBe(false);
     });
+
+    it("fails closed when the stored hash is malformed", () => {
+      expect(service.verifySecret("test-secret", "not-a-sha256-hash")).toBe(
+        false,
+      );
+    });
   });
 
   describe("lookupAndVerifyKey", () => {
@@ -234,6 +240,11 @@ describe("ApiKeyService", () => {
       // Verify the query included the organization filter
       const callArgs = prismaService.apiKey.findFirst.mock.calls[0][0];
       expect(callArgs.where.organizationId).toBe("wrong-org-id");
+      expect(callArgs.where.status).toBe(ResourceStatus.ACTIVE);
+      expect(callArgs.where.OR).toEqual([
+        { expiresAt: null },
+        { expiresAt: { gt: expect.any(Date) } },
+      ]);
       expect(result).toBeNull();
     });
   });
@@ -400,6 +411,11 @@ describe("ApiKeyService", () => {
       expect(result.secret).toBeDefined();
       expect(result.secret).not.toBe(oldSecret);
       expect(result.apiKey.rotatedAt).toBeDefined();
+      expect(prismaService.apiKey.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "key_123", organizationId: "org_123" },
+        }),
+      );
     });
 
     it("enforces organization isolation on rotation", async () => {
@@ -441,7 +457,7 @@ describe("ApiKeyService", () => {
 
   describe("revokeKey", () => {
     it("marks key as REVOKED", async () => {
-      prismaService.apiKey.findUnique.mockResolvedValueOnce({
+      prismaService.apiKey.findFirst.mockResolvedValueOnce({
         organizationId: "org_123",
         prefix: "prefix",
         name: "Key",
@@ -456,7 +472,7 @@ describe("ApiKeyService", () => {
     });
 
     it("takes effect immediately (no cache window)", async () => {
-      prismaService.apiKey.findUnique.mockResolvedValueOnce({
+      prismaService.apiKey.findFirst.mockResolvedValueOnce({
         organizationId: "org_123",
         prefix: "prefix",
         name: "Key",
@@ -469,19 +485,22 @@ describe("ApiKeyService", () => {
     });
 
     it("enforces organization isolation on revocation", async () => {
-      prismaService.apiKey.findUnique.mockResolvedValueOnce({
-        organizationId: "org_wrong",
-        prefix: "prefix",
-        name: "Key",
-      });
+      prismaService.apiKey.findFirst.mockResolvedValueOnce(null);
 
       await expect(
         service.revokeKey("key_123", "org_correct", "user_123"),
-      ).rejects.toThrow("does not belong to this organization");
+      ).rejects.toThrow("Key not found");
+
+      expect(prismaService.apiKey.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "key_123", organizationId: "org_correct" },
+        }),
+      );
+      expect(prismaService.apiKey.update).not.toHaveBeenCalled();
     });
 
     it("logs revocation to audit trail", async () => {
-      prismaService.apiKey.findUnique.mockResolvedValueOnce({
+      prismaService.apiKey.findFirst.mockResolvedValueOnce({
         organizationId: "org_123",
         prefix: "testpref",
         name: "Test Key",

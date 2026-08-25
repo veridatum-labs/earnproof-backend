@@ -39,14 +39,14 @@ export class ApiKeyGuard implements CanActivate {
     // Extract Authorization header
     const authHeader = request.headers.authorization;
     if (!authHeader?.startsWith("Bearer ")) {
-      throw new UnauthorizedException("Missing or invalid Authorization header");
+      throw new UnauthorizedException("Invalid API key");
     }
 
     const presentedKey = authHeader.slice("Bearer ".length);
 
     // Parse presented key: first 8 chars = prefix
-    if (presentedKey.length < 8) {
-      throw new UnauthorizedException("Invalid API key format");
+    if (!/^[A-Za-z0-9_-]{43}$/.test(presentedKey)) {
+      throw new UnauthorizedException("Invalid API key");
     }
 
     const prefix = presentedKey.substring(0, 8);
@@ -56,9 +56,7 @@ export class ApiKeyGuard implements CanActivate {
     // In a real system, this might come from a subdomain, path, or explicit header
     const organizationId = this.extractOrganizationId(request);
     if (!organizationId) {
-      throw new UnauthorizedException(
-        "Organization context required for API key authentication",
-      );
+      throw new UnauthorizedException("Invalid API key");
     }
 
     try {
@@ -85,7 +83,8 @@ export class ApiKeyGuard implements CanActivate {
       };
 
       // Store in request for retrieval by handlers
-      (request as any).apiKeyContext = apiKeyContext;
+      (request as Request & { apiKeyContext?: ApiKeyContext }).apiKeyContext =
+        apiKeyContext;
 
       // Record usage (timestamp only, no IP/UA)
       await this.apiKeyService.recordKeyUsage(apiKey.id, apiKey.organizationId);

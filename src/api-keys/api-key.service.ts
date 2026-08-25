@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ApiKeyScope, ResourceStatus } from "@prisma/client";
-import { randomBytes } from "crypto";
+import { randomBytes, timingSafeEqual } from "crypto";
 import { sha256 } from "../common/crypto/hash";
 import { PrismaService } from "../database/prisma.service";
 
@@ -79,8 +79,11 @@ export class ApiKeyService {
    */
   verifySecret(secret: string, storedHash: string): boolean {
     const computedHash = this.hashSecret(secret);
-    // Constant-time comparison to prevent timing attacks
-    return computedHash === storedHash;
+    if (!/^[a-f0-9]{64}$/i.test(storedHash)) return false;
+    return timingSafeEqual(
+      Buffer.from(computedHash, "hex"),
+      Buffer.from(storedHash, "hex"),
+    );
   }
 
   /**
@@ -105,13 +108,8 @@ export class ApiKeyService {
       where: {
         prefix,
         organizationId,
-        status: {
-          in: [ResourceStatus.ACTIVE, ResourceStatus.PENDING], // Only valid statuses
-        },
-        // Check expiration if expiresAt is set
-        expiresAt: {
-          gt: new Date(), // Null values pass this filter
-        },
+        status: ResourceStatus.ACTIVE,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
       },
       include: {
         scopeAssignments: {
@@ -227,7 +225,7 @@ export class ApiKeyService {
     const keyHash = this.hashSecret(secret);
 
     const apiKey = await this.prisma.apiKey.update({
-      where: { id: keyId },
+      where: { id: keyId, organizationId },
       data: {
         prefix,
         keyHash,
@@ -285,8 +283,8 @@ export class ApiKeyService {
    * @param actorId - User performing the revocation
    */
   async revokeKey(keyId: string, organizationId: string, actorId?: string) {
-    const apiKey = await this.prisma.apiKey.findUnique({
-      where: { id: keyId },
+    const apiKey = await this.prisma.apiKey.findFirst({
+      where: { id: keyId, organizationId },
       select: {
         organizationId: true,
         prefix: true,
@@ -298,13 +296,8 @@ export class ApiKeyService {
       throw new Error("Key not found");
     }
 
-    // Enforce organization isolation at query level
-    if (apiKey.organizationId !== organizationId) {
-      throw new Error("Key does not belong to this organization");
-    }
-
     await this.prisma.apiKey.update({
-      where: { id: keyId },
+      where: { id: keyId, organizationId },
       data: {
         status: ResourceStatus.REVOKED,
         revokedAt: new Date(),
