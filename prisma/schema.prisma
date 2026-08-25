@@ -72,6 +72,30 @@ enum VerificationOutcome {
   ISSUER_WARNING
 }
 
+enum AnchoringOperation {
+  REGISTER
+  REVOKE
+}
+
+enum AnchoringStatus {
+  PENDING
+  PROCESSING
+  CONFIRMED
+  FAILED
+enum ApiKeyScope {
+  // Proof verification and reading
+  PROOF_READ
+  PROOF_VERIFY
+  
+  // Payment management and reading
+  PAYMENT_READ
+  PAYMENT_WRITE
+  
+  // Organization management
+  ORG_READ
+  ORG_ADMIN
+}
+
 model User {
   id                 String          @id @default(cuid())
   walletAddress      String          @unique
@@ -86,7 +110,6 @@ model User {
   trustedSources     TrustedSource[]
   proofs             Proof[]
   createdApiKeys     ApiKey[]
-  auditLogs          AuditLog[]
   sessions           AuthSession[]
 
   @@index([walletHash])
@@ -247,6 +270,7 @@ model Proof {
   updatedAt               DateTime            @updatedAt
   claim                   ProofClaim?
   verificationEvents      VerificationEvent[]
+  anchoringIntents        AnchoringIntent[]
 
   @@index([userId, status])
   @@index([userId, createdAt, id])
@@ -319,13 +343,27 @@ model ApiKey {
   createdById    String
   createdBy      User            @relation(fields: [createdById], references: [id])
   name           String
+  prefix         String          @db.VarChar(8)
   keyHash        String          @unique
+  scopeAssignments ApiKeyScopeAssignment[] @relation("apiKeyScopeAssignments")
   status         ResourceStatus  @default(ACTIVE)
   lastUsedAt     DateTime?
+  rotatedAt      DateTime?
+  revokedAt      DateTime?
   expiresAt      DateTime?
   createdAt      DateTime        @default(now())
 
   @@index([organizationId, status])
+  @@index([prefix])
+}
+
+model ApiKeyScopeAssignment {
+  id       String      @id @default(cuid())
+  apiKeyId String
+  apiKey   ApiKey      @relation("apiKeyScopeAssignments", fields: [apiKeyId], references: [id], onDelete: Cascade)
+  scope    ApiKeyScope
+
+  @@unique([apiKeyId, scope])
 }
 
 model Webhook {
@@ -346,7 +384,6 @@ model AuditLog {
   id           String   @id @default(cuid())
   actorType    String
   actorId      String?
-  actor        User?    @relation(fields: [actorId], references: [id])
   action       String
   resourceType String
   resourceId   String?
@@ -356,4 +393,25 @@ model AuditLog {
   @@index([actorType, actorId])
   @@index([resourceType, resourceId])
   @@index([createdAt])
+}
+
+model AnchoringIntent {
+  id              String             @id @default(cuid())
+  proofId         String
+  proof           Proof              @relation(fields: [proofId], references: [id])
+  operation       AnchoringOperation
+  status          AnchoringStatus    @default(PENDING)
+  attemptCount    Int                @default(0)
+  lastAttemptAt   DateTime?
+  nextRetryAt     DateTime?
+  transactionHash String?
+  ledger          String?
+  lastErrorSafe   String?
+  permanentError  Boolean            @default(false)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@unique([proofId, operation])
+  @@index([nextRetryAt])
+  @@index([proofId])
 }

@@ -24,6 +24,13 @@ describe("ProofsService lifecycle", () => {
         };
         return values[key];
       }),
+      get: jest.fn((key: string) => {
+        const values: Record<string, boolean | undefined> = {
+          "contractAnchoring.enabled": false,
+          "contractAnchoring.required": false,
+        };
+        return values[key];
+      }),
     } as never, mockVerificationEventService);
     const user = {
       id: "user_lifecycle",
@@ -90,71 +97,91 @@ function createProofStore() {
   const proofs = new Map<string, Record<string, unknown>>();
   const verificationEvents: Record<string, unknown>[] = [];
 
-  return {
-    verificationEvents,
-    prisma: {
-      payment: {
-        findMany: jest.fn(({ where }) =>
-          Promise.resolve(
-            payments.filter(
-              (payment) =>
-                payment.userId === where.userId &&
-                where.id.in.includes(payment.id),
-            ),
+  const prisma = {
+    payment: {
+      findMany: jest.fn(({ where }) =>
+        Promise.resolve(
+          payments.filter(
+            (payment) =>
+              payment.userId === where.userId &&
+              where.id.in.includes(payment.id),
           ),
         ),
-      },
-      proof: {
-        create: jest.fn(({ data }) => {
-          const proof = {
-            ...data,
-            proofType: ProofType.MINIMUM_INCOME,
-            status: data.status,
-            createdAt: data.createdAt,
-            revokedAt: null,
-            user,
-            claim: {
-              ...data.claim.create,
-            },
-          };
-          proofs.set(data.id, proof);
-          return Promise.resolve(proof);
-        }),
-        findUnique: jest.fn(({ where }) => {
-          const proof = proofs.get(where.id);
-          return Promise.resolve(proof ?? null);
-        }),
-        update: jest.fn(({ where, data, select }) => {
-          const proof = proofs.get(where.id);
-          if (!proof) {
-            return Promise.resolve(null);
-          }
+      ),
+    },
+    proof: {
+      // Used by revokeProof (findUnique before update) and verifyProof.
+      findUnique: jest.fn(({ where }) => {
+        const proof = proofs.get(where.id);
+        return Promise.resolve(proof ?? null);
+      }),
+      update: jest.fn(({ where, data, select }) => {
+        const proof = proofs.get(where.id);
+        if (!proof) {
+          return Promise.resolve(null);
+        }
 
-          const updated = {
-            ...proof,
-            ...data,
-          };
-          proofs.set(where.id, updated);
+        const updated = { ...proof, ...data };
+        proofs.set(where.id, updated);
 
-          return Promise.resolve(
-            Object.keys(select).reduce<Record<string, unknown>>((result, key) => {
-              result[key] = updated[key];
-              return result;
-            }, {}),
-          );
-        }),
-      },
-      verificationEvent: {
-        create: jest.fn(({ data }) => {
-          verificationEvents.push(data);
-          return Promise.resolve({ id: `event_${verificationEvents.length}` });
-        }),
-      },
+        return Promise.resolve(
+          Object.keys(select).reduce<Record<string, unknown>>((result, key) => {
+            result[key] = updated[key];
+            return result;
+          }, {}),
+        );
+      }),
       verificationEventLog: {
         create: jest.fn().mockResolvedValue({ id: "event_1" }),
       },
     },
+    verificationEvent: {
+      create: jest.fn(({ data }) => {
+        verificationEvents.push(data);
+        return Promise.resolve({ id: `event_${verificationEvents.length}` });
+      }),
+    },
+    // $transaction is used by createMinimumIncomeProof and revokeProof.
+    $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) => {
+      const tx = {
+        proof: {
+          create: jest.fn(({ data }) => {
+            const proof = {
+              ...data,
+              proofType: ProofType.MINIMUM_INCOME,
+              status: data.status,
+              createdAt: data.createdAt,
+              revokedAt: null,
+              contractTransactionHash: null,
+              user,
+              claim: { ...data.claim.create },
+            };
+            proofs.set(data.id, proof);
+            return Promise.resolve(proof);
+          }),
+          update: jest.fn(({ where, data, select }) => {
+            const proof = proofs.get(where.id);
+            if (!proof) return Promise.resolve(null);
+            const updated = { ...proof, ...data };
+            proofs.set(where.id, updated);
+            if (!select) return Promise.resolve(updated);
+            return Promise.resolve(
+              Object.keys(select).reduce<Record<string, unknown>>((result, key) => {
+                result[key] = updated[key];
+                return result;
+              }, {}),
+            );
+          }),
+        },
+        anchoringIntent: {
+          create: jest.fn().mockResolvedValue({ id: "intent_1" }),
+        },
+      };
+      return fn(tx);
+    }),
   };
+
+  return { verificationEvents, prisma };
 }
 
 function protectAmount(amount: string) {

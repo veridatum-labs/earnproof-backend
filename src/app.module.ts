@@ -4,16 +4,19 @@ import { APP_GUARD } from "@nestjs/core";
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { ScheduleModule } from "@nestjs/schedule";
 import { AuditModule } from "./audit/audit.module";
+import { ApiKeysModule } from "./api-keys/api-keys.module";
 import { AuthModule } from "./auth/auth.module";
 import { configuration } from "./config/configuration";
 import { validateEnv } from "./config/env.validation";
 import { CredentialsModule } from "./credentials/credentials.module";
 import { DatabaseModule } from "./database/database.module";
 import { HealthModule } from "./health/health.module";
+import { JobsModule } from "./jobs/jobs.module";
 import { IssuersModule } from "./issuers/issuers.module";
 import { OrganizationsModule } from "./organizations/organizations.module";
 import { PaymentsModule } from "./payments/payments.module";
 import { ProofsModule } from "./proofs/proofs.module";
+import { TrustedSourcesModule } from "./trusted-sources/trusted-sources.module";
 
 @Module({
   imports: [
@@ -32,6 +35,7 @@ import { ProofsModule } from "./proofs/proofs.module";
     ScheduleModule.forRoot(),
     DatabaseModule,
     AuditModule,
+    ApiKeysModule,
     AuthModule,
     HealthModule,
     OrganizationsModule,
@@ -45,6 +49,8 @@ import { ProofsModule } from "./proofs/proofs.module";
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
     },
+    TrustedSourcesModule,
+    JobsModule,
   ],
 })
 export class AppModule {}

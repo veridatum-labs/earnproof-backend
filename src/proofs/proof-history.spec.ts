@@ -4,6 +4,7 @@ import { ProofsService } from "./proofs.service";
 
 describe("ProofsService proof history", () => {
   const config = {
+    get: jest.fn().mockReturnValue(false),
     getOrThrow: jest.fn((key: string) => {
       const values: Record<string, string> = {
         credentialSigningSecret: "test-signing-secret",
