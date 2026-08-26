@@ -96,6 +96,22 @@ test/
 docs/
 ```
 
+## Architecture
+
+[`docs/architecture.md`](docs/architecture.md) is the maintained map of the
+backend: what each module owns, which dependencies it must not take, how the
+critical flows run, and which domain invariants hold. Every invariant links to
+the code that enforces it and the test that fails if it stops — the handbook is
+checked against the codebase by [`src/docs-links.spec.ts`](src/docs-links.spec.ts),
+so a module added without documentation, or a link to a moved file, fails the
+build.
+
+[`docs/adr/`](docs/adr/) records the decisions that shaped it, including when a
+new ADR is required.
+
+Start there before adding a module, moving a table, or introducing an
+unauthenticated endpoint.
+
 ## Local Setup
 
 ```bash
