@@ -1,6 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
-import { APP_GUARD } from "@nestjs/core";
+import { APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { ScheduleModule } from "@nestjs/schedule";
 import { AuditModule } from "./audit/audit.module";
@@ -11,6 +11,8 @@ import { validateEnv } from "./config/env.validation";
 import { CredentialsModule } from "./credentials/credentials.module";
 import { DatabaseModule } from "./database/database.module";
 import { HealthModule } from "./health/health.module";
+import { HttpMetricsInterceptor } from "./common/interceptors/http-metrics.interceptor";
+import { ObservabilityModule } from "./common/observability/observability.module";
 import { JobsModule } from "./jobs/jobs.module";
 import { IssuersModule } from "./issuers/issuers.module";
 import { OrganizationsModule } from "./organizations/organizations.module";
@@ -34,6 +36,7 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
       },
     ]),
     ScheduleModule.forRoot(),
+    ObservabilityModule,
     DatabaseModule,
     AuditModule,
     ApiKeysModule,
@@ -52,6 +55,10 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: HttpMetricsInterceptor,
     },
   ],
 })
