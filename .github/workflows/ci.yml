@@ -28,3 +28,60 @@ jobs:
       - run: npm run lint
       - run: npm test -- --runInBand
       - run: npm run build
+
+  integration:
+    # Runs alongside `backend` rather than after it. The two suites fail for
+    # different reasons — a mocked-unit failure is a logic error, an integration
+    # failure is a schema or migration error — and serialising them would only
+    # delay the second answer.
+    if: github.event_name != 'pull_request_target' || !github.event.pull_request.draft
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Pinned to the major version the application targets. The migrations
+        # are only proven against the version CI actually runs, so this must
+        # track docker-compose.yml and the documented local requirement.
+        image: postgres:17
+        env:
+          POSTGRES_USER: earnproof
+          POSTGRES_PASSWORD: earnproof
+          POSTGRES_DB: earnproof_test
+        ports:
+          - 5432:5432
+        # Without the health check the first step races the server's startup and
+        # fails with a connection error that looks like a broken harness.
+        options: >-
+          --health-cmd "pg_isready -U earnproof"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql://earnproof:earnproof@localhost:5432/earnproof_test
+      # Fixed, obviously-fake values. The suite never reaches a real network or
+      # a real Stellar account, so none of these is a credential.
+      NODE_ENV: test
+      SESSION_SECRET: ci-integration-session-secret
+      CREDENTIAL_SIGNING_SECRET: ci-integration-signing-secret
+      PAYMENT_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          allow-unsafe-pr-checkout: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run prisma:generate
+      # Global setup drops and recreates the template database, applies every
+      # migration in prisma/migrations to it, and verifies the result matches
+      # schema.prisma. Each worker then clones the template.
+      - run: npm run test:integration
