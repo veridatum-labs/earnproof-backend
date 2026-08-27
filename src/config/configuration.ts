@@ -31,6 +31,16 @@ export const configuration = () => ({
     issuerAddress: process.env.EARNPROOF_ISSUER_ADDRESS,
     schemaVersion: Number(process.env.EARNPROOF_SCHEMA_VERSION ?? 1),
   },
+  health: {
+    // Probe timeout. Must stay below the orchestrator's own probe timeout, or a
+    // slow dependency produces overlapping in-flight probes against a system
+    // that is already struggling.
+    probeTimeoutMs: Number(process.env.HEALTH_PROBE_TIMEOUT_MS ?? 2000),
+    // How long a probe result is reused. Readiness is polled continuously by
+    // every replica and load balancer, so without caching the probe load scales
+    // with poll rate rather than with anything meaningful.
+    cacheTtlMs: Number(process.env.HEALTH_CACHE_TTL_MS ?? 5000),
+  },
   issuerRegistry: {
     enabled: process.env.ISSUER_REGISTRY_ENABLED === "true",
     stellarCliPath: process.env.STELLAR_CLI_PATH ?? "stellar",
