@@ -27,6 +27,12 @@ jobs:
       - run: npm run prisma:generate
       - run: npm run lint
       - run: npm test -- --runInBand
+      # Replays every frozen signing vector through the reference verifier and
+      # then through the reference receiver over a real HTTP socket. Run as its
+      # own step, not just inside Jest, so a break in the published conformance
+      # entry point is visible as a distinct failure — that command is what
+      # integrators run, and it has to keep working on its own.
+      - run: npm run webhook:conformance
       - run: npm run build
 
   integration:
