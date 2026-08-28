@@ -4,10 +4,13 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { AuthEventType } from "@prisma/client";
 import { Keypair, StrKey } from "@stellar/stellar-base";
 import { createHash, randomBytes } from "crypto";
 import { PrismaService } from "../database/prisma.service";
 import { sha256 } from "../common/crypto/hash";
+import { AuthAuditService } from "./auth-audit.service";
+import { AuthRateLimiterService } from "./auth-rate-limiter.service";
 import { SessionService } from "./session.service";
 
 @Injectable()
@@ -18,6 +21,8 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sessionService: SessionService,
+    private readonly auditService: AuthAuditService,
+    private readonly rateLimiter: AuthRateLimiterService,
     configService: ConfigService,
   ) {
     this.appUrl = configService.getOrThrow<string>("appUrl");
@@ -26,8 +31,14 @@ export class AuthService {
     );
   }
 
-  async createChallenge(walletAddress: string) {
+  async createChallenge(walletAddress: string, clientMetadata?: string) {
     this.assertValidPublicKey(walletAddress);
+
+    // Check rate limits before creating challenge
+    await this.rateLimiter.checkChallengeCreationLimit(
+      walletAddress,
+      clientMetadata,
+    );
 
     const nonce = randomBytes(24).toString("base64url");
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
@@ -54,6 +65,17 @@ export class AuthService {
       },
     });
 
+    // Record successful challenge creation
+    await this.auditService.recordEvent(
+      AuthEventType.CHALLENGE_CREATED,
+      walletAddress,
+      {
+        challengeId: challenge.id,
+        success: true,
+        clientMetadata,
+      },
+    );
+
     return challenge;
   }
 
@@ -61,8 +83,15 @@ export class AuthService {
     challengeId: string;
     walletAddress: string;
     signature: string;
+    clientMetadata?: string;
   }) {
     this.assertValidPublicKey(input.walletAddress);
+
+    // Check rate limits before verification attempt
+    await this.rateLimiter.checkVerificationLimit(
+      input.walletAddress,
+      input.clientMetadata,
+    );
 
     const challenge = await this.prisma.walletChallenge.findFirst({
       where: {
@@ -74,6 +103,39 @@ export class AuthService {
     });
 
     if (!challenge) {
+      // Determine if challenge was used (replay) or expired
+      const usedChallenge = await this.prisma.walletChallenge.findFirst({
+        where: {
+          id: input.challengeId,
+          walletAddress: input.walletAddress,
+          usedAt: { not: null },
+        },
+      });
+
+      if (usedChallenge) {
+        await this.auditService.recordEvent(
+          AuthEventType.CHALLENGE_REPLAYED,
+          input.walletAddress,
+          {
+            challengeId: input.challengeId,
+            success: false,
+            failureReason: "Challenge already used",
+            clientMetadata: input.clientMetadata,
+          },
+        );
+      } else {
+        await this.auditService.recordEvent(
+          AuthEventType.CHALLENGE_EXPIRED,
+          input.walletAddress,
+          {
+            challengeId: input.challengeId,
+            success: false,
+            failureReason: "Challenge expired or not found",
+            clientMetadata: input.clientMetadata,
+          },
+        );
+      }
+
       throw new UnauthorizedException("Challenge is expired or unavailable");
     }
 
@@ -84,6 +146,17 @@ export class AuthService {
     );
 
     if (!isValid) {
+      await this.auditService.recordEvent(
+        AuthEventType.SIGNATURE_INVALID,
+        input.walletAddress,
+        {
+          challengeId: input.challengeId,
+          success: false,
+          failureReason: "Invalid signature",
+          clientMetadata: input.clientMetadata,
+        },
+      );
+
       throw new UnauthorizedException("Invalid wallet signature");
     }
 
@@ -112,6 +185,17 @@ export class AuthService {
       walletHash: user.walletHash,
       role: user.role,
     });
+
+    // Record successful verification
+    await this.auditService.recordEvent(
+      AuthEventType.CHALLENGE_VERIFIED,
+      input.walletAddress,
+      {
+        challengeId: input.challengeId,
+        success: true,
+        clientMetadata: input.clientMetadata,
+      },
+    );
 
     return {
       user: {
