@@ -292,10 +292,13 @@ describe("AuthService.verifyChallenge", () => {
 
   it("records challenge replay event", async () => {
     const prisma = makePrismaMock();
-    // Challenge not found in active query, but found with usedAt
-    prisma.walletChallenge.findFirst
-      .mockResolvedValueOnce(null) // First call: no active challenge
-      .mockResolvedValueOnce({ ...challenge, usedAt: new Date() }); // Second call: used challenge
+    // The guarded consume matches nothing, and the challenge turns out to
+    // already carry a usedAt: that is a replay, not an expiry.
+    prisma.walletChallenge.updateMany.mockResolvedValue({ count: 0 });
+    prisma.walletChallenge.findFirst.mockResolvedValue({
+      ...challenge,
+      usedAt: new Date(),
+    });
 
     const sessionSvc = new SessionService(prisma as never, config);
     const auditSvc = makeAuditServiceMock();
@@ -334,6 +337,8 @@ describe("AuthService.verifyChallenge", () => {
 
   it("records challenge expired event", async () => {
     const prisma = makePrismaMock();
+    // Nothing consumed and no used row either: expired, or never existed.
+    prisma.walletChallenge.updateMany.mockResolvedValue({ count: 0 });
     prisma.walletChallenge.findFirst.mockResolvedValue(null);
 
     const sessionSvc = new SessionService(prisma as never, config);
@@ -397,7 +402,7 @@ describe("AuthService.verifyChallenge", () => {
     ).rejects.toThrow("Invalid wallet signature");
   });
 
-  it("marks the challenge as used", async () => {
+  it("consumes the challenge atomically before verifying the signature", async () => {
     const prisma = makePrismaMock();
     (prisma as Record<string, unknown>).authSession = {
       create: jest.fn().mockResolvedValue({}),
@@ -419,16 +424,24 @@ describe("AuthService.verifyChallenge", () => {
 
     await svc.verifyChallenge({ challengeId: challenge.id, walletAddress, signature });
 
-    expect(prisma.walletChallenge.update).toHaveBeenCalledWith(
+    // Consumed by the guarded update itself, before the signature is checked:
+    // the where clause is what makes concurrent verifications race for one row.
+    expect(prisma.walletChallenge.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: challenge.id },
+        where: expect.objectContaining({
+          id: challenge.id,
+          walletAddress,
+          usedAt: null,
+        }),
         data: { usedAt: expect.any(Date) },
       }),
     );
+    expect(prisma.walletChallenge.update).not.toHaveBeenCalled();
   });
 
   it("throws when no matching challenge exists", async () => {
     const prisma = makePrismaMock();
+    prisma.walletChallenge.updateMany.mockResolvedValue({ count: 0 });
     prisma.walletChallenge.findFirst.mockResolvedValue(null);
     const sessionSvc = new SessionService(prisma as never, config);
     const auditSvc = makeAuditServiceMock();
