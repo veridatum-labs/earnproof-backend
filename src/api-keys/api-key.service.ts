@@ -249,7 +249,7 @@ export class ApiKeyService {
     await this.prisma.auditLog.create({
       data: {
         actorType: "user",
-        actorId: actorId || "",
+        actorId: actorId ?? null,
         action: "api_key.rotated",
         resourceType: "api_key",
         resourceId: apiKey.id,
@@ -308,7 +308,7 @@ export class ApiKeyService {
     await this.prisma.auditLog.create({
       data: {
         actorType: "user",
-        actorId: actorId || "",
+        actorId: actorId ?? null,
         action: "api_key.revoked",
         resourceType: "api_key",
         resourceId: keyId,
