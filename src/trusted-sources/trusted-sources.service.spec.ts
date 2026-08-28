@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException } from "@nestjs/common";
 import { ResourceStatus } from "@prisma/client";
+import { Keypair } from "@stellar/stellar-base";
 import { TrustedSourcesService } from "./trusted-sources.service";
 import { CreateTrustedSourceDto } from "./dto/create-trusted-source.dto";
 import { UpdateTrustedSourceDto } from "./dto/update-trusted-source.dto";
@@ -12,7 +13,9 @@ describe("TrustedSourcesService", () => {
     role: "WORKER",
   };
 
-  const validStellarAddress = "GA7VQQHSVVZKN3ZKQV447QVFVXHQDZV7SXUQE3ALN75MNKPVZ2JVXVJ";
+  const validStellarAddress = Keypair.fromRawEd25519Seed(
+    Buffer.alloc(32, 1),
+  ).publicKey();
 
   describe("createTrustedSource", () => {
     it("creates a new trusted source with normalized address", async () => {
@@ -476,6 +479,7 @@ describe("TrustedSourcesService", () => {
       const result = await service.deleteTrustedSource(user, "ts_1");
 
       expect(result.status).toBe(ResourceStatus.DELETED);
+      expect(result.retainedForHistory).toBe(true);
       expect(prisma.trustedSource.update).toHaveBeenCalledWith({
         where: { id: "ts_1" },
         data: {
@@ -489,7 +493,8 @@ describe("TrustedSourcesService", () => {
             action: "trusted_source.deleted",
             actorId: user.id,
             metadata: expect.objectContaining({
-              sourceAddress: validStellarAddress,
+              sourceAddressHash: expect.any(String),
+              retentionPolicy: "soft_delete",
             }),
           }),
         }),

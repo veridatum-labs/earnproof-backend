@@ -1,5 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsOptional, IsString, IsUUID } from "class-validator";
+import {
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from "class-validator";
 
 export class CreateTrustedSourceDto {
   @ApiProperty({
@@ -7,6 +13,7 @@ export class CreateTrustedSourceDto {
     example: "GBXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
   })
   @IsString()
+  @IsNotEmpty()
   sourceAddress: string;
 
   @ApiPropertyOptional({
@@ -15,6 +22,7 @@ export class CreateTrustedSourceDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(120)
   displayName?: string;
 
   @ApiPropertyOptional({
@@ -22,7 +30,7 @@ export class CreateTrustedSourceDto {
     example: "stellar",
   })
   @IsOptional()
-  @IsString()
+  @IsIn(["stellar"])
   sourceType?: string;
 
   @ApiPropertyOptional({
@@ -30,6 +38,7 @@ export class CreateTrustedSourceDto {
     example: "issuer_123abc",
   })
   @IsOptional()
-  @IsUUID()
+  @IsString()
+  @IsNotEmpty()
   issuerId?: string;
 }

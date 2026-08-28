@@ -36,6 +36,7 @@ Implemented:
 - Initial database migration
 - Seed script for native XLM testnet asset
 - Jest tests for auth, token handling, health, Stellar payment mapping, payment sync/classification, and proof issuance/verification states
+- PostgreSQL integration test harness that applies every migration to an empty database
 
 Core entities currently modeled:
 
@@ -93,8 +94,30 @@ prisma/
   seed.ts
   migrations/
 test/
+  integration/
+    harness/
 docs/
 ```
+
+## Architecture
+
+[`docs/architecture.md`](docs/architecture.md) is the maintained map of the
+backend: what each module owns, which dependencies it must not take, how the
+critical flows run, and which domain invariants hold. Every invariant links to
+the code that enforces it and the test that fails if it stops — the handbook is
+checked against the codebase by [`src/docs-links.spec.ts`](src/docs-links.spec.ts),
+so a module added without documentation, or a link to a moved file, fails the
+build.
+
+[`docs/adr/`](docs/adr/) records the decisions that shaped it, including when a
+new ADR is required.
+
+[`docs/webhooks.md`](docs/webhooks.md) is the integrator-facing guide to
+verifying signed webhook deliveries, backed by frozen conformance vectors and a
+runnable reference receiver (`npm run webhook:conformance`).
+
+Start there before adding a module, moving a table, or introducing an
+unauthenticated endpoint.
 
 ## Local Setup
 
@@ -169,6 +192,49 @@ Prisma validation:
 $env:DATABASE_URL='postgresql://earnproof:earnproof@localhost:5432/earnproof'
 npx prisma validate
 ```
+
+## Integration Tests
+
+`npm run test` runs against a mocked Prisma client. The integration suite runs
+against a real PostgreSQL server: it applies every migration in
+`prisma/migrations` to an empty database and then covers proof
+creation/revocation, webhook retry persistence, authentication sessions, payment
+uniqueness, transaction commit and rollback, constraint violations, and
+concurrent writes.
+
+```bash
+npm run test:integration
+```
+
+It needs PostgreSQL 17 and a role that can create databases. Docker is not
+required.
+
+```sql
+-- once, as a superuser
+CREATE ROLE earnproof WITH LOGIN PASSWORD 'earnproof' CREATEDB;
+```
+
+```bash
+TEST_DATABASE_URL=postgresql://earnproof:earnproof@localhost:5432/earnproof_test
+```
+
+PowerShell:
+
+```powershell
+$env:TEST_DATABASE_URL='postgresql://earnproof:earnproof@localhost:5432/earnproof_test'
+npm run test:integration
+```
+
+The named database is a naming base, not a target: the harness creates
+`earnproof_test_template` and one `earnproof_test_w<worker>` per Jest worker, and
+drops them again on teardown. `TEST_DATABASE_URL` is kept separate from
+`DATABASE_URL`, and refused unless the name contains `test`, so a development
+database can never be the target.
+
+[`docs/integration-testing.md`](docs/integration-testing.md) documents the
+isolation model, the startup and teardown deadlines, and the redaction that
+keeps connection strings, wallet addresses, protected amounts, and signing
+material out of test failures.
 
 ## Privacy and Security Requirements
 
