@@ -100,6 +100,21 @@ export class AuthService {
         usedAt: null,
         expiresAt: { gt: new Date() },
       },
+      data: {
+        usedAt: new Date(),
+      },
+    });
+
+    if (consumedChallenge.count === 0) {
+      throw new UnauthorizedException("Challenge is expired or unavailable");
+    }
+
+    // Fetch the challenge again to get the message for signature verification.
+    // The challenge is now marked as used, so even if verification fails, it cannot be reused.
+    const challenge = await this.prisma.walletChallenge.findUnique({
+      where: {
+        id: input.challengeId,
+      },
     });
 
     if (!challenge) {

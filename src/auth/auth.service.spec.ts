@@ -33,7 +33,9 @@ function makePrismaMock() {
     walletChallenge: {
       create: jest.fn().mockResolvedValue(challenge),
       findFirst: jest.fn().mockResolvedValue(challenge),
+      findUnique: jest.fn().mockResolvedValue(challenge),
       update: jest.fn().mockResolvedValue({ ...challenge, usedAt: new Date() }),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     user: {
       upsert: jest.fn().mockResolvedValue(dbUser),
