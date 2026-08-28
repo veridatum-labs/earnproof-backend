@@ -292,10 +292,13 @@ describe("AuthService.verifyChallenge", () => {
 
   it("records challenge replay event", async () => {
     const prisma = makePrismaMock();
-    // Challenge not found in active query, but found with usedAt
-    prisma.walletChallenge.findFirst
-      .mockResolvedValueOnce(null) // First call: no active challenge
-      .mockResolvedValueOnce({ ...challenge, usedAt: new Date() }); // Second call: used challenge
+    // The atomic consumption update matches 0 rows (already used), and the
+    // replay-detection lookup finds the challenge with usedAt already set.
+    prisma.walletChallenge.updateMany.mockResolvedValueOnce({ count: 0 });
+    prisma.walletChallenge.findFirst.mockResolvedValueOnce({
+      ...challenge,
+      usedAt: new Date(),
+    });
 
     const sessionSvc = new SessionService(prisma as never, config);
     const auditSvc = makeAuditServiceMock();
@@ -334,7 +337,10 @@ describe("AuthService.verifyChallenge", () => {
 
   it("records challenge expired event", async () => {
     const prisma = makePrismaMock();
-    prisma.walletChallenge.findFirst.mockResolvedValue(null);
+    // The atomic consumption update matches 0 rows (expired/missing), and
+    // the replay-detection lookup finds nothing with usedAt set either.
+    prisma.walletChallenge.updateMany.mockResolvedValueOnce({ count: 0 });
+    prisma.walletChallenge.findFirst.mockResolvedValueOnce(null);
 
     const sessionSvc = new SessionService(prisma as never, config);
     const auditSvc = makeAuditServiceMock();
@@ -419,9 +425,15 @@ describe("AuthService.verifyChallenge", () => {
 
     await svc.verifyChallenge({ challengeId: challenge.id, walletAddress, signature });
 
-    expect(prisma.walletChallenge.update).toHaveBeenCalledWith(
+    // Consumption happens via the atomic updateMany (usedAt: null in its
+    // where clause guards against a concurrent double-consume) — there is
+    // no separate .update() call afterward.
+    expect(prisma.walletChallenge.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: challenge.id },
+        where: expect.objectContaining({
+          id: challenge.id,
+          usedAt: null,
+        }),
         data: { usedAt: expect.any(Date) },
       }),
     );
@@ -429,7 +441,8 @@ describe("AuthService.verifyChallenge", () => {
 
   it("throws when no matching challenge exists", async () => {
     const prisma = makePrismaMock();
-    prisma.walletChallenge.findFirst.mockResolvedValue(null);
+    prisma.walletChallenge.updateMany.mockResolvedValueOnce({ count: 0 });
+    prisma.walletChallenge.findFirst.mockResolvedValueOnce(null);
     const sessionSvc = new SessionService(prisma as never, config);
     const auditSvc = makeAuditServiceMock();
     const rateLimiter = makeRateLimiterMock();
