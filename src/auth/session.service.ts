@@ -4,6 +4,7 @@ import { randomBytes } from "crypto";
 import { PrismaService } from "../database/prisma.service";
 import { sha256 } from "../common/crypto/hash";
 import { AuthenticatedUser } from "./auth.types";
+import { Clock, SystemClock } from "../common/time/clock";
 
 /** Default session TTL: 12 hours in seconds. */
 const DEFAULT_TTL_SECONDS = 60 * 60 * 12;
@@ -25,6 +26,11 @@ export class SessionService {
   constructor(
     private readonly prisma: PrismaService,
     configService: ConfigService,
+    // Defaults to the real system clock so every existing call site (Nest's
+    // DI container, and every test that constructs SessionService directly)
+    // keeps working unchanged; pass a FixedClock (test/time/fixed-clock.ts)
+    // to control "now" deterministically in boundary tests.
+    private readonly clock: Clock = new SystemClock(),
   ) {
     // Re-use the existing SESSION_SECRET env var to confirm the config is
     // present; actual token confidentiality comes from the random bytes,
@@ -46,7 +52,7 @@ export class SessionService {
     ttlSeconds = this.sessionTtlSeconds,
   ): Promise<{ token: string; sessionId: string; expiresAt: Date }> {
     const { token, tokenHash, sessionId } = this.generateToken();
-    const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+    const expiresAt = new Date(this.clock.nowMs() + ttlSeconds * 1000);
 
     await this.prisma.authSession.create({
       data: {
@@ -97,7 +103,7 @@ export class SessionService {
       throw new UnauthorizedException("Session has been revoked");
     }
 
-    if (session.expiresAt <= new Date()) {
+    if (session.expiresAt <= this.clock.now()) {
       throw new UnauthorizedException("Session has expired");
     }
 
@@ -105,7 +111,7 @@ export class SessionService {
     this.prisma.authSession
       .update({
         where: { id: session.id },
-        data: { lastUsedAt: new Date() },
+        data: { lastUsedAt: this.clock.now() },
       })
       .catch(() => {
         // Deliberately swallowed: a failed timestamp update must not break
@@ -127,7 +133,7 @@ export class SessionService {
         id: sessionId,
         revokedAt: null, // idempotent guard
       },
-      data: { revokedAt: new Date() },
+      data: { revokedAt: this.clock.now() },
     });
   }
 
@@ -147,7 +153,7 @@ export class SessionService {
     ttlSeconds = this.sessionTtlSeconds,
   ): Promise<{ token: string; sessionId: string; expiresAt: Date }> {
     const { token, tokenHash, sessionId: newSessionId } = this.generateToken();
-    const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+    const expiresAt = new Date(this.clock.nowMs() + ttlSeconds * 1000);
 
     await this.prisma.$transaction(async (transaction) => {
       const existing = await transaction.authSession.findUnique({
@@ -165,7 +171,7 @@ export class SessionService {
         );
       }
 
-      if (existing.expiresAt <= new Date()) {
+      if (existing.expiresAt <= this.clock.now()) {
         throw new UnauthorizedException("Session has expired");
       }
 
@@ -181,7 +187,7 @@ export class SessionService {
       const revoked = await transaction.authSession.updateMany({
         where: { id: sessionId, userId: user.id, revokedAt: null },
         data: {
-          revokedAt: new Date(),
+          revokedAt: this.clock.now(),
           rotatedToId: newSessionId,
         },
       });
@@ -205,7 +211,7 @@ export class SessionService {
         userId,
         revokedAt: null,
       },
-      data: { revokedAt: new Date() },
+      data: { revokedAt: this.clock.now() },
     });
   }
 
@@ -215,7 +221,7 @@ export class SessionService {
    *
    * @returns  Number of rows deleted.
    */
-  async deleteExpired(olderThan: Date = new Date()): Promise<number> {
+  async deleteExpired(olderThan: Date = this.clock.now()): Promise<number> {
     const result = await this.prisma.authSession.deleteMany({
       where: { expiresAt: { lt: olderThan } },
     });
