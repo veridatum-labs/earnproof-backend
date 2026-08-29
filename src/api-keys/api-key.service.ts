@@ -79,11 +79,31 @@ export class ApiKeyService {
    */
   verifySecret(secret: string, storedHash: string): boolean {
     const computedHash = this.hashSecret(secret);
-    if (!/^[a-f0-9]{64}$/i.test(storedHash)) return false;
-    return timingSafeEqual(
-      Buffer.from(computedHash, "hex"),
-      Buffer.from(storedHash, "hex"),
-    );
+    
+    // SECURITY: Use constant-time comparison to prevent timing attacks.
+    // Timing attacks exploit variable execution time to distinguish between:
+    //   - Invalid format (fails regex, returns early)
+    //   - Valid format but wrong value (runs full comparison)
+    // By always performing the full comparison regardless of format validity,
+    // we ensure attackers cannot leak information about the expected hash format
+    // via response timing. We use a dummy buffer of correct length (64 hex chars = 32 bytes)
+    // for malformed storedHash to maintain constant execution time.
+    
+    const isValidFormat = /^[a-f0-9]{64}$/i.test(storedHash);
+    const hashBufferToCompare = isValidFormat
+      ? Buffer.from(storedHash, "hex")
+      : Buffer.alloc(32); // Dummy: 32 bytes (same length as a valid SHA-256 hash)
+    
+    try {
+      return timingSafeEqual(
+        Buffer.from(computedHash, "hex"),
+        hashBufferToCompare,
+      );
+    } catch {
+      // timingSafeEqual throws if buffers are different lengths
+      // This shouldn't happen given our allocation strategy, but guard anyway
+      return false;
+    }
   }
 
   /**
