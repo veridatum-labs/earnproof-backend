@@ -24,7 +24,9 @@
     "seed:demo": "ts-node prisma/seed-demo.ts",
     "drill:verify": "ts-node scripts/backup/verify-backup-format.ts",
     "webhook:conformance": "ts-node scripts/webhook-receiver/conformance.ts",
-    "webhook:receiver": "ts-node scripts/webhook-receiver/receiver.ts"
+    "webhook:receiver": "ts-node scripts/webhook-receiver/receiver.ts",
+    "sbom:generate": "ts-node scripts/sbom/generate.ts",
+    "sbom:check": "ts-node scripts/sbom/check.ts"
   },
   "dependencies": {
     "@nestjs/cli": "^11.0.14",
