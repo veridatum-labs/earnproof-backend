@@ -22,6 +22,26 @@ export const configuration = () => ({
   verificationHashSaltVersion: Number(
     process.env.VERIFICATION_HASH_SALT_VERSION ?? 0,
   ),
+  auth: {
+    challengeRetentionDays: Number(
+      process.env.AUTH_CHALLENGE_RETENTION_DAYS ?? 7,
+    ),
+    auditRetentionDays: Number(process.env.AUTH_AUDIT_RETENTION_DAYS ?? 90),
+    rateLimits: {
+      maxChallengeCreations: Number(
+        process.env.AUTH_RATE_LIMIT_MAX_CHALLENGE_CREATIONS ?? 10,
+      ),
+      challengeCreationWindowMs: Number(
+        process.env.AUTH_RATE_LIMIT_CHALLENGE_CREATION_WINDOW_MS ?? 900000, // 15 minutes
+      ),
+      maxVerifications: Number(
+        process.env.AUTH_RATE_LIMIT_MAX_VERIFICATIONS ?? 5,
+      ),
+      verificationWindowMs: Number(
+        process.env.AUTH_RATE_LIMIT_VERIFICATION_WINDOW_MS ?? 900000, // 15 minutes
+      ),
+    },
+  },
   contractAnchoring: {
     enabled: process.env.CONTRACT_ANCHORING_ENABLED === "true",
     required: process.env.CONTRACT_ANCHORING_REQUIRED === "true",

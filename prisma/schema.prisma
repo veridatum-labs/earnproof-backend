@@ -84,6 +84,15 @@ enum AnchoringStatus {
   FAILED
 }
 
+enum AuthEventType {
+  CHALLENGE_CREATED
+  CHALLENGE_VERIFIED
+  SIGNATURE_INVALID
+  CHALLENGE_EXPIRED
+  CHALLENGE_REPLAYED
+  RATE_LIMITED
+}
+
 enum ApiKeyScope {
   // Proof verification and reading
   PROOF_READ
@@ -448,4 +457,19 @@ model AnchoringIntent {
   @@unique([proofId, operation])
   @@index([nextRetryAt])
   @@index([proofId])
+}
+
+model AuthAuditEvent {
+  id                 String        @id @default(cuid())
+  eventType          AuthEventType
+  walletHash         String
+  clientMetadataHash String?
+  challengeId        String?
+  success            Boolean
+  failureReason      String?
+  createdAt          DateTime      @default(now())
+
+  @@index([walletHash, createdAt])
+  @@index([eventType, createdAt])
+  @@index([createdAt])
 }

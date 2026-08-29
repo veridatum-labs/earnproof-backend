@@ -112,6 +112,10 @@ build.
 [`docs/adr/`](docs/adr/) records the decisions that shaped it, including when a
 new ADR is required.
 
+[`docs/webhooks.md`](docs/webhooks.md) is the integrator-facing guide to
+verifying signed webhook deliveries, backed by frozen conformance vectors and a
+runnable reference receiver (`npm run webhook:conformance`).
+
 Start there before adding a module, moving a table, or introducing an
 unauthenticated endpoint.
 
