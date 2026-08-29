@@ -22,6 +22,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "seed:demo": "ts-node prisma/seed-demo.ts",
+    "db:reset": "ts-node prisma/reset.ts",
     "drill:verify": "ts-node scripts/backup/verify-backup-format.ts",
     "webhook:conformance": "ts-node scripts/webhook-receiver/conformance.ts",
     "webhook:receiver": "ts-node scripts/webhook-receiver/receiver.ts"
