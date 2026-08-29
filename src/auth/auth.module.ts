@@ -6,6 +6,7 @@ import { AuthGuard } from "../common/guards/auth.guard";
 import { CleanupJob } from "./cleanup.job";
 import { AuthAuditService } from "./auth-audit.service";
 import { AuthRateLimiterService } from "./auth-rate-limiter.service";
+import { Clock, SystemClock } from "../common/time/clock";
 
 @Module({
   controllers: [AuthController],
@@ -16,6 +17,7 @@ import { AuthRateLimiterService } from "./auth-rate-limiter.service";
     AuthRateLimiterService,
     AuthGuard,
     CleanupJob,
+    { provide: Clock, useClass: SystemClock },
   ],
   exports: [SessionService, AuthGuard, AuthAuditService],
 })

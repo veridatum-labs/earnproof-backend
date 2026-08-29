@@ -599,6 +599,96 @@ describe("ApiKeyService", () => {
     });
   });
 
+  describe("verifySecret timing consistency", () => {
+    it("executes in constant time regardless of input format validity", () => {
+      const correctSecret = "correct-secret-value-12345";
+      const correctHash = service.hashSecret(correctSecret);
+
+      // Prepare test cases: well-formatted wrong, malformed, and correct
+      const malformedHash = "not-a-valid-hash-format";
+      const wrongButFormatted = "a".repeat(64); // Valid format but wrong value
+
+      // Measure execution time for each case
+      // We'll run each multiple times and average to reduce flakiness
+      const iterations = 100;
+      const timings = {
+        malformed: [] as number[],
+        wrongFormatted: [] as number[],
+        correct: [] as number[],
+      };
+
+      for (let i = 0; i < iterations; i++) {
+        // Malformed input
+        const start1 = process.hrtime.bigint();
+        service.verifySecret(correctSecret, malformedHash);
+        const end1 = process.hrtime.bigint();
+        timings.malformed.push(Number(end1 - start1));
+
+        // Wrong but properly formatted
+        const start2 = process.hrtime.bigint();
+        service.verifySecret(correctSecret, wrongButFormatted);
+        const end2 = process.hrtime.bigint();
+        timings.wrongFormatted.push(Number(end2 - start2));
+
+        // Correct secret
+        const start3 = process.hrtime.bigint();
+        service.verifySecret(correctSecret, correctHash);
+        const end3 = process.hrtime.bigint();
+        timings.correct.push(Number(end3 - start3));
+      }
+
+      // Calculate averages (in nanoseconds)
+      const avgMalformed =
+        timings.malformed.reduce((a, b) => a + b, 0) / iterations;
+      const avgWrongFormatted =
+        timings.wrongFormatted.reduce((a, b) => a + b, 0) / iterations;
+      const avgCorrect = timings.correct.reduce((a, b) => a + b, 0) / iterations;
+
+      // Allow 50% variance (timing can vary in CI environments)
+      // This is a loose tolerance to avoid flaky tests
+      const maxDeviation = Math.max(avgMalformed, avgWrongFormatted, avgCorrect) *
+        0.5;
+
+      expect(Math.abs(avgMalformed - avgWrongFormatted)).toBeLessThan(
+        maxDeviation,
+      );
+      expect(Math.abs(avgWrongFormatted - avgCorrect)).toBeLessThan(
+        maxDeviation,
+      );
+      expect(Math.abs(avgMalformed - avgCorrect)).toBeLessThan(maxDeviation);
+    });
+
+    it("handles malformed hashes without early exit", () => {
+      const secret = "test-secret";
+      const malformedHashes = [
+        "",
+        "too-short",
+        "!@#$%^&*()",
+        "00000000000000000000000000000000000000000000000000000000000000", // 63 chars
+        "000000000000000000000000000000000000000000000000000000000000000g", // 64 chars but invalid char
+      ];
+
+      // All should return false, and process should complete normally
+      for (const hash of malformedHashes) {
+        const result = service.verifySecret(secret, hash);
+        expect(result).toBe(false);
+      }
+    });
+
+    it("correctly rejects malformed hashes via constant-time path", () => {
+      const secret = "my-secret";
+      const hash = service.hashSecret(secret);
+
+      // These should all return false (no match)
+      expect(service.verifySecret(secret, "X".repeat(64))).toBe(false);
+      expect(service.verifySecret(secret, "invalid-format")).toBe(false);
+      expect(service.verifySecret(secret, "")).toBe(false);
+
+      // And the correct should still work
+      expect(service.verifySecret(secret, hash)).toBe(true);
+    });
+  });
+
   describe("security invariants", () => {
     it("lifecycle ensures secret is never retrievable after creation", async () => {
       // Create a key
