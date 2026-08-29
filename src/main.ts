@@ -1,11 +1,9 @@
 import { ClassSerializerInterceptor, Logger, ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { NestFactory, Reflector } from "@nestjs/core";
+import { NestFactory } from "@nestjs/core";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
-import helmet from "helmet";
 import { AppModule } from "./app.module";
-import { GlobalExceptionFilter } from "./common/filters/global-exception.filter";
-import { RequestIdInterceptor } from "./common/interceptors/request-id.interceptor";
+import { configureApp } from "./bootstrap";
 import { ApiErrorDto, FieldViolationDto } from "./common/dto/api-error.dto";
 import { HealthService } from "./health/health.service";
 
@@ -30,33 +28,10 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
   const port = configService.getOrThrow<number>("port");
 
-  app.setGlobalPrefix("api/v1");
-  app.use(helmet());
-  app.enableCors({
-    origin: configService.getOrThrow<string>("appUrl"),
-    credentials: true,
-    exposedHeaders: ["x-request-id"],
-  });
-
-  // ── Request-ID interceptor (must run before the exception filter so that
-  //    req.requestId is populated when an error is thrown by a guard or pipe).
-  app.useGlobalInterceptors(
-    new RequestIdInterceptor(),
-    new ClassSerializerInterceptor(app.get(Reflector)),
-  );
-
-  // ── Global exception filter — converts every thrown error to ApiErrorDto.
-  //    Registered after interceptors so it can read req.requestId.
-  app.useGlobalFilters(new GlobalExceptionFilter());
-
-  // ── Validation pipe — forbids unknown fields, enables implicit type coercion.
-  app.useGlobalPipes(
-    new ValidationPipe({
-      forbidNonWhitelisted: true,
-      transform: true,
-      whitelist: true,
-    }),
-  );
+  // Body limits, structural limits, security headers, CORS, interceptors, the
+  // error filter and validation, in the order a request meets them. See
+  // `src/bootstrap.ts`; kept there so tests can exercise the same pipeline.
+  configureApp(app, { corsOrigin: configService.getOrThrow<string>("appUrl") });
 
   // ── Swagger / OpenAPI ────────────────────────────────────────────────────
   const documentConfig = new DocumentBuilder()

@@ -43,6 +43,9 @@ export enum ApiErrorCode {
   // 409 – request conflicts with current state
   CONFLICT = "CONFLICT",
 
+  // 413 – the request exceeded a transport or structural limit
+  PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE",
+
   // 429 – rate limiting
   TOO_MANY_REQUESTS = "TOO_MANY_REQUESTS",
 
