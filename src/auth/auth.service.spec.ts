@@ -296,6 +296,10 @@ describe("AuthService.verifyChallenge", () => {
     // already carry a usedAt: that is a replay, not an expiry.
     prisma.walletChallenge.updateMany.mockResolvedValue({ count: 0 });
     prisma.walletChallenge.findFirst.mockResolvedValue({
+    // The atomic consumption update matches 0 rows (already used), and the
+    // replay-detection lookup finds the challenge with usedAt already set.
+    prisma.walletChallenge.updateMany.mockResolvedValueOnce({ count: 0 });
+    prisma.walletChallenge.findFirst.mockResolvedValueOnce({
       ...challenge,
       usedAt: new Date(),
     });
@@ -340,6 +344,10 @@ describe("AuthService.verifyChallenge", () => {
     // Nothing consumed and no used row either: expired, or never existed.
     prisma.walletChallenge.updateMany.mockResolvedValue({ count: 0 });
     prisma.walletChallenge.findFirst.mockResolvedValue(null);
+    // The atomic consumption update matches 0 rows (expired/missing), and
+    // the replay-detection lookup finds nothing with usedAt set either.
+    prisma.walletChallenge.updateMany.mockResolvedValueOnce({ count: 0 });
+    prisma.walletChallenge.findFirst.mockResolvedValueOnce(null);
 
     const sessionSvc = new SessionService(prisma as never, config);
     const auditSvc = makeAuditServiceMock();
@@ -426,6 +434,9 @@ describe("AuthService.verifyChallenge", () => {
 
     // Consumed by the guarded update itself, before the signature is checked:
     // the where clause is what makes concurrent verifications race for one row.
+    // Consumption happens via the atomic updateMany (usedAt: null in its
+    // where clause guards against a concurrent double-consume) — there is
+    // no separate .update() call afterward.
     expect(prisma.walletChallenge.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
@@ -443,6 +454,8 @@ describe("AuthService.verifyChallenge", () => {
     const prisma = makePrismaMock();
     prisma.walletChallenge.updateMany.mockResolvedValue({ count: 0 });
     prisma.walletChallenge.findFirst.mockResolvedValue(null);
+    prisma.walletChallenge.updateMany.mockResolvedValueOnce({ count: 0 });
+    prisma.walletChallenge.findFirst.mockResolvedValueOnce(null);
     const sessionSvc = new SessionService(prisma as never, config);
     const auditSvc = makeAuditServiceMock();
     const rateLimiter = makeRateLimiterMock();
