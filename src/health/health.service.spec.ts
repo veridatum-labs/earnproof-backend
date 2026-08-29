@@ -376,4 +376,46 @@ describe("HealthService", () => {
       );
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // beginShutdown (earnproof-backend#68)
+  // ---------------------------------------------------------------------------
+
+  describe("beginShutdown", () => {
+    it("makes checkReadiness report not_ready immediately, even with a healthy database", async () => {
+      const prisma = buildPrisma();
+      const service = new HealthService(prisma, buildConfig());
+
+      // Sanity check: ready before shutdown begins.
+      expect((await service.checkReadiness()).status).toBe("ready");
+
+      service.beginShutdown();
+      const result = await service.checkReadiness();
+
+      expect(result.status).toBe("not_ready");
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1); // only the pre-shutdown call
+    });
+
+    it("does not consult or extend the dependency cache while shutting down", async () => {
+      const prisma = buildPrisma();
+      const service = new HealthService(prisma, buildConfig());
+      await service.checkReadiness(); // warms the cache
+
+      service.beginShutdown();
+      await service.checkReadiness();
+      await service.checkReadiness();
+
+      // No additional probes after beginShutdown() — the not_ready answer is
+      // synthesized without touching the database at all.
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    });
+
+    it("is idempotent — calling it more than once is safe", () => {
+      const service = new HealthService(buildPrisma(), buildConfig());
+      expect(() => {
+        service.beginShutdown();
+        service.beginShutdown();
+      }).not.toThrow();
+    });
+  });
 });

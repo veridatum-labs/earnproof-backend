@@ -1,6 +1,7 @@
 import { UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { SessionService } from "./session.service";
+import { FixedClock } from "../../test/time/fixed-clock";
 
 // ---------------------------------------------------------------------------
 // Minimal Prisma mock — every method is a jest.fn() returning sensible defaults
@@ -452,5 +453,146 @@ describe("SessionService concurrent revocation", () => {
 
     expect(r1.status).toBe("fulfilled");
     expect(r2.status).toBe("fulfilled");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Clock-skew and expiry-boundary coverage (earnproof-backend#66)
+//
+// Uses FixedClock so the exact-before / exact-at / exact-after boundary is
+// deterministic — no real sleeps, no timing flakiness.
+// ---------------------------------------------------------------------------
+
+describe("SessionService expiry boundary (deterministic clock)", () => {
+  const TTL_SECONDS = 3600;
+
+  it("accepts a session strictly before its expiry instant", async () => {
+    const clock = new FixedClock("2030-01-01T00:00:00.000Z");
+    const prisma = makePrismaMock();
+    prisma.authSession.create.mockResolvedValue({});
+    const svc = new SessionService(prisma as never, config, clock);
+
+    const { token, expiresAt } = await svc.create(
+      { id: "u", walletAddress: "G".padEnd(56, "A"), walletHash: "h", role: "WORKER" },
+      TTL_SECONDS,
+    );
+
+    // One millisecond before expiry: still valid.
+    clock.set(expiresAt.getTime() - 1);
+    prisma.authSession.findUnique.mockResolvedValue(
+      activeSession({ expiresAt }),
+    );
+    prisma.authSession.update.mockResolvedValue({});
+
+    await expect(svc.validate(token)).resolves.toEqual(
+      expect.objectContaining({ userId: "user_1" }),
+    );
+  });
+
+  it("rejects a session exactly at its expiry instant (inclusive boundary)", async () => {
+    const clock = new FixedClock("2030-01-01T00:00:00.000Z");
+    const prisma = makePrismaMock();
+    prisma.authSession.create.mockResolvedValue({});
+    const svc = new SessionService(prisma as never, config, clock);
+
+    const { token, expiresAt } = await svc.create(
+      { id: "u", walletAddress: "G".padEnd(56, "A"), walletHash: "h", role: "WORKER" },
+      TTL_SECONDS,
+    );
+
+    // Exactly at expiresAt: expiresAt <= now, so this must be rejected —
+    // documents the boundary as inclusive (session.service.ts's own
+    // `session.expiresAt <= this.clock.now()` check).
+    clock.set(expiresAt.getTime());
+    prisma.authSession.findUnique.mockResolvedValue(
+      activeSession({ expiresAt }),
+    );
+
+    await expect(svc.validate(token)).rejects.toThrow("Session has expired");
+  });
+
+  it("rejects a session one millisecond after its expiry instant", async () => {
+    const clock = new FixedClock("2030-01-01T00:00:00.000Z");
+    const prisma = makePrismaMock();
+    prisma.authSession.create.mockResolvedValue({});
+    const svc = new SessionService(prisma as never, config, clock);
+
+    const { token, expiresAt } = await svc.create(
+      { id: "u", walletAddress: "G".padEnd(56, "A"), walletHash: "h", role: "WORKER" },
+      TTL_SECONDS,
+    );
+
+    clock.set(expiresAt.getTime() + 1);
+    prisma.authSession.findUnique.mockResolvedValue(
+      activeSession({ expiresAt }),
+    );
+
+    await expect(svc.validate(token)).rejects.toThrow("Session has expired");
+  });
+
+  it("survives forward clock skew without throwing outside validate's own expiry check", async () => {
+    // Forward skew: the clock jumps far ahead between create() and
+    // validate() (e.g. NTP correction on the server). The only effect
+    // should be that the session is (correctly) treated as expired — no
+    // exception other than the documented UnauthorizedException.
+    const clock = new FixedClock("2030-01-01T00:00:00.000Z");
+    const prisma = makePrismaMock();
+    prisma.authSession.create.mockResolvedValue({});
+    const svc = new SessionService(prisma as never, config, clock);
+
+    const { token, expiresAt } = await svc.create(
+      { id: "u", walletAddress: "G".padEnd(56, "A"), walletHash: "h", role: "WORKER" },
+      TTL_SECONDS,
+    );
+
+    clock.advanceMs(365 * 24 * 60 * 60 * 1000); // +1 year
+    prisma.authSession.findUnique.mockResolvedValue(
+      activeSession({ expiresAt }),
+    );
+
+    await expect(svc.validate(token)).rejects.toThrow(UnauthorizedException);
+  });
+
+  it("survives backward clock skew (still resolves a well-formed expiresAt)", async () => {
+    // Backward skew: the clock jumps into the past. create() must still
+    // compute a well-formed expiresAt (ttl seconds after whatever "now"
+    // the clock reports), and a session created and validated entirely
+    // within that skewed window must still be treated as valid.
+    const clock = new FixedClock("2030-01-01T00:00:00.000Z");
+    clock.advanceMs(-365 * 24 * 60 * 60 * 1000); // -1 year, before create()
+    const prisma = makePrismaMock();
+    prisma.authSession.create.mockResolvedValue({});
+    const svc = new SessionService(prisma as never, config, clock);
+
+    const { token, expiresAt } = await svc.create(
+      { id: "u", walletAddress: "G".padEnd(56, "A"), walletHash: "h", role: "WORKER" },
+      TTL_SECONDS,
+    );
+    expect(expiresAt.getTime()).toBe(clock.nowMs() + TTL_SECONDS * 1000);
+
+    prisma.authSession.findUnique.mockResolvedValue(
+      activeSession({ expiresAt }),
+    );
+    prisma.authSession.update.mockResolvedValue({});
+
+    await expect(svc.validate(token)).resolves.toEqual(
+      expect.objectContaining({ userId: "user_1" }),
+    );
+  });
+
+  it("deleteExpired's default cutoff tracks the injected clock, not the real system clock", async () => {
+    // Regression guard for the injectable-clock refactor itself: the
+    // default-parameter cutoff must come from `clock.now()`, not a bare
+    // `new Date()` that would silently ignore an injected FixedClock.
+    const clock = new FixedClock("2030-06-15T12:00:00.000Z");
+    const prisma = makePrismaMock();
+    prisma.authSession.deleteMany.mockResolvedValue({ count: 0 });
+    const svc = new SessionService(prisma as never, config, clock);
+
+    await svc.deleteExpired();
+
+    expect(prisma.authSession.deleteMany).toHaveBeenCalledWith({
+      where: { expiresAt: { lt: new Date("2030-06-15T12:00:00.000Z") } },
+    });
   });
 });

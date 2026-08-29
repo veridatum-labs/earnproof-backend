@@ -1,45 +1,37 @@
-import { ClassSerializerInterceptor, ValidationPipe } from "@nestjs/common";
+import { ClassSerializerInterceptor, Logger, ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { NestFactory, Reflector } from "@nestjs/core";
+import { NestFactory } from "@nestjs/core";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
-import helmet from "helmet";
 import { AppModule } from "./app.module";
-import { GlobalExceptionFilter } from "./common/filters/global-exception.filter";
-import { RequestIdInterceptor } from "./common/interceptors/request-id.interceptor";
+import { configureApp } from "./bootstrap";
 import { ApiErrorDto, FieldViolationDto } from "./common/dto/api-error.dto";
+import { HealthService } from "./health/health.service";
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  let app;
+
+  try {
+    // ── Configuration validation happens during module initialization ──
+    // The validateEnv() hook in AppModule runs immediately, checking both
+    // individual field constraints and cross-variable invariants. If validation
+    // fails, NestFactory.create() throws and execution never reaches app.listen().
+    app = await NestFactory.create(AppModule);
+  } catch (error) {
+    // ── FAIL FAST: Configuration errors prevent startup entirely ──
+    // This ensures the server never listens with bad configuration.
+    const logger = new Logger("Bootstrap");
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(`Configuration validation failed: ${message}`);
+    process.exit(1);
+  }
+
   const configService = app.get(ConfigService);
   const port = configService.getOrThrow<number>("port");
 
-  app.setGlobalPrefix("api/v1");
-  app.use(helmet());
-  app.enableCors({
-    origin: configService.getOrThrow<string>("appUrl"),
-    credentials: true,
-    exposedHeaders: ["x-request-id"],
-  });
-
-  // ── Request-ID interceptor (must run before the exception filter so that
-  //    req.requestId is populated when an error is thrown by a guard or pipe).
-  app.useGlobalInterceptors(
-    new RequestIdInterceptor(),
-    new ClassSerializerInterceptor(app.get(Reflector)),
-  );
-
-  // ── Global exception filter — converts every thrown error to ApiErrorDto.
-  //    Registered after interceptors so it can read req.requestId.
-  app.useGlobalFilters(new GlobalExceptionFilter());
-
-  // ── Validation pipe — forbids unknown fields, enables implicit type coercion.
-  app.useGlobalPipes(
-    new ValidationPipe({
-      forbidNonWhitelisted: true,
-      transform: true,
-      whitelist: true,
-    }),
-  );
+  // Body limits, structural limits, security headers, CORS, interceptors, the
+  // error filter and validation, in the order a request meets them. See
+  // `src/bootstrap.ts`; kept there so tests can exercise the same pipeline.
+  configureApp(app, { corsOrigin: configService.getOrThrow<string>("appUrl") });
 
   // ── Swagger / OpenAPI ────────────────────────────────────────────────────
   const documentConfig = new DocumentBuilder()
@@ -89,6 +81,43 @@ async function bootstrap() {
       persistAuthorization: true,
     },
   });
+
+  // ── Graceful shutdown (earnproof-backend#68) ────────────────────────────
+  // enableShutdownHooks() is what makes Nest actually call each provider's
+  // onModuleDestroy/onApplicationShutdown on SIGTERM/SIGINT — without it,
+  // those lifecycle hooks never fire and the process exits mid-work. See
+  // docs/shutdown.md for the full runbook (what each worker drains, how to
+  // verify it, how to force-terminate safely).
+  app.enableShutdownHooks();
+
+  const shutdownLogger = new Logger("Shutdown");
+  const health = app.get(HealthService);
+
+  const shutdown = async (signal: string) => {
+    shutdownLogger.log(`Received ${signal} — starting graceful shutdown`);
+
+    // Flip readiness to not_ready FIRST, before Nest's own module-destroy
+    // sequence runs, so a load balancer stops routing new traffic here as
+    // early in the sequence as possible — new work stops arriving before
+    // any draining begins.
+    health.beginShutdown();
+
+    try {
+      await app.close();
+      shutdownLogger.log("Shutdown complete");
+      process.exit(0);
+    } catch (err) {
+      shutdownLogger.error(
+        `Shutdown did not complete cleanly: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      process.exit(1);
+    }
+  };
+
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
 
   await app.listen(port);
 }
