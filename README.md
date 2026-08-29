@@ -231,6 +231,10 @@ drops them again on teardown. `TEST_DATABASE_URL` is kept separate from
 `DATABASE_URL`, and refused unless the name contains `test`, so a development
 database can never be the target.
 
+[`docs/development.md`](docs/development.md) documents the local database
+tooling: seeding a synthetic scenario, resetting a disposable database, and the
+guards that refuse to do either against anything else.
+
 [`docs/integration-testing.md`](docs/integration-testing.md) documents the
 isolation model, the startup and teardown deadlines, and the redaction that
 keeps connection strings, wallet addresses, protected amounts, and signing

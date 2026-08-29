@@ -207,11 +207,6 @@ export class AuthService {
       },
     });
 
-    // The challenge was already atomically marked consumed above (the
-    // updateMany with usedAt: null in its where clause) — that's what makes
-    // this endpoint single-use under concurrent requests. No second write
-    // is needed here.
-
     // Create a persisted, revocable session.  Only the hash is stored.
     const { token, sessionId, expiresAt } = await this.sessionService.create({
       id: user.id,
