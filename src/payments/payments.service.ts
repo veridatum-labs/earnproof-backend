@@ -6,7 +6,7 @@ import {
   Prisma,
   ResourceStatus,
 } from "@prisma/client";
-import { encryptProtectedAmount } from "../common/crypto/protected-amount";
+import { PaymentEncryptionKeyringService } from "../common/crypto/payment-encryption-keyring.service";
 import { PrismaService } from "../database/prisma.service";
 import { StellarService } from "../stellar/stellar.service";
 import { normalizeMemo } from "../stellar/memo-normalizer";
@@ -14,15 +14,15 @@ import { NormalizedMemo } from "../stellar/stellar.types";
 
 @Injectable()
 export class PaymentsService {
-  private readonly paymentEncryptionKey: string;
+  private readonly paymentEncryptionKeyring: PaymentEncryptionKeyringService;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly stellarService: StellarService,
     configService: ConfigService,
   ) {
-    this.paymentEncryptionKey = configService.getOrThrow<string>(
-      "paymentEncryptionKey",
+    this.paymentEncryptionKeyring = new PaymentEncryptionKeyringService(
+      configService,
     );
   }
 
@@ -217,7 +217,7 @@ export class PaymentsService {
   }
 
   private protectAmount(amount: string) {
-    return encryptProtectedAmount(amount, this.paymentEncryptionKey);
+    return this.paymentEncryptionKeyring.encrypt(amount);
   }
 
   private toPaymentDto(payment: Payment) {

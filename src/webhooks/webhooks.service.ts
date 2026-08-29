@@ -6,10 +6,7 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { ResourceStatus } from "@prisma/client";
 import { randomBytes } from "crypto";
-import {
-  decryptProtectedAmount,
-  encryptProtectedAmount,
-} from "../common/crypto/protected-amount";
+import { PaymentEncryptionKeyringService } from "../common/crypto/payment-encryption-keyring.service";
 import { PrismaService } from "../database/prisma.service";
 import { CreateWebhookDto } from "./dto/create-webhook.dto";
 import { UpdateWebhookEventsDto } from "./dto/update-webhook-events.dto";
@@ -20,14 +17,16 @@ const SECRET_BYTES = 32;
 
 @Injectable()
 export class WebhooksService {
-  private readonly encryptionKey: string;
+  private readonly paymentEncryptionKeyring: PaymentEncryptionKeyringService;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly deliveryService: WebhookDeliveryService,
     configService: ConfigService,
   ) {
-    this.encryptionKey = configService.getOrThrow<string>("paymentEncryptionKey");
+    this.paymentEncryptionKeyring = new PaymentEncryptionKeyringService(
+      configService,
+    );
   }
 
   /**
@@ -38,7 +37,7 @@ export class WebhooksService {
    */
   async create(organizationId: string, dto: CreateWebhookDto) {
     const rawSecret = randomBytes(SECRET_BYTES).toString("hex");
-    const secretEncrypted = encryptProtectedAmount(rawSecret, this.encryptionKey);
+    const secretEncrypted = this.paymentEncryptionKeyring.encrypt(rawSecret);
 
     // De-duplicate events list
     const events = [...new Set(dto.events)];
@@ -113,7 +112,7 @@ export class WebhooksService {
     await this.assertOwnedWebhook(organizationId, webhookId);
 
     const newRawSecret = randomBytes(SECRET_BYTES).toString("hex");
-    const newSecretEncrypted = encryptProtectedAmount(newRawSecret, this.encryptionKey);
+    const newSecretEncrypted = this.paymentEncryptionKeyring.encrypt(newRawSecret);
 
     await this.prisma.webhook.update({
       where: { id: webhookId },
@@ -294,6 +293,6 @@ export class WebhooksService {
 
   /** Expose decrypt for testing secret rotation. */
   revealSecret(secretEncrypted: string): string {
-    return decryptProtectedAmount(secretEncrypted, this.encryptionKey);
+    return this.paymentEncryptionKeyring.decrypt(secretEncrypted);
   }
 }

@@ -28,6 +28,12 @@ const envSchema = z.object({
   SESSION_SECRET: z.string().min(8),
   CREDENTIAL_SIGNING_SECRET: z.string().min(8),
   PAYMENT_ENCRYPTION_KEY: encryptionKey,
+  PAYMENT_ENCRYPTION_KEY_VERSION: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .default(0),
   CONTRACT_ANCHORING_ENABLED: z
     .enum(["true", "false"])
     .optional()

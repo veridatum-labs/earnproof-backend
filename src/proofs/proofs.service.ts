@@ -24,7 +24,7 @@ import { VerificationEventService } from "../audit/verification-event.service";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { canonicalize } from "../common/crypto/canonicalize";
 import { sha256 } from "../common/crypto/hash";
-import { decryptProtectedAmount } from "../common/crypto/protected-amount";
+import { PaymentEncryptionKeyringService } from "../common/crypto/payment-encryption-keyring.service";
 import { ApiErrorCode } from "../common/dto/api-error.dto";
 import { PrismaService } from "../database/prisma.service";
 import { WebhookDeliveryService } from "../webhooks/webhook-delivery.service";
@@ -118,7 +118,7 @@ type EarnProofCredential =
 @Injectable()
 export class ProofsService {
   private readonly signingSecret: string;
-  private readonly paymentEncryptionKey: string;
+  private readonly paymentEncryptionKeyring: PaymentEncryptionKeyringService;
   private readonly stellarNetwork: string;
   private readonly anchoringEnabled: boolean;
   private readonly anchoringRequired: boolean;
@@ -135,8 +135,8 @@ export class ProofsService {
     this.signingSecret = configService.getOrThrow<string>(
       "credentialSigningSecret",
     );
-    this.paymentEncryptionKey = configService.getOrThrow<string>(
-      "paymentEncryptionKey",
+    this.paymentEncryptionKeyring = new PaymentEncryptionKeyringService(
+      configService,
     );
     this.stellarNetwork = configService.getOrThrow<string>("stellar.network");
     this.anchoringEnabled =
@@ -1204,7 +1204,7 @@ export class ProofsService {
 
     try {
       return this.parseAmount(
-        decryptProtectedAmount(amountEncrypted, this.paymentEncryptionKey),
+        this.paymentEncryptionKeyring.decrypt(amountEncrypted),
       );
     } catch {
       throw new BadRequestException("Selected payment amount is unavailable");
@@ -1219,7 +1219,7 @@ export class ProofsService {
       });
     }
     try {
-      return decryptProtectedAmount(amountEncrypted, this.paymentEncryptionKey);
+      return this.paymentEncryptionKeyring.decrypt(amountEncrypted);
     } catch {
       throw new UnprocessableEntityException({
         code: ApiErrorCode.PAYMENT_NOT_ELIGIBLE,
@@ -1231,7 +1231,7 @@ export class ProofsService {
   private revealPaymentAmountForVerification(amountEncrypted: string | null) {
     try {
       return amountEncrypted
-        ? decryptProtectedAmount(amountEncrypted, this.paymentEncryptionKey)
+        ? this.paymentEncryptionKeyring.decrypt(amountEncrypted)
         : "";
     } catch {
       return "";
