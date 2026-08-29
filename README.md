@@ -234,6 +234,9 @@ database can never be the target.
 [`docs/request-limits.md`](docs/request-limits.md) documents the largest request
 the API accepts at each boundary -- transport, structure, and domain -- and why
 each limit is set where it is.
+[`docs/development.md`](docs/development.md) documents the local database
+tooling: seeding a synthetic scenario, resetting a disposable database, and the
+guards that refuse to do either against anything else.
 
 [`docs/integration-testing.md`](docs/integration-testing.md) documents the
 isolation model, the startup and teardown deadlines, and the redaction that
