@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Prisma, WebhookDeliveryStatus } from "@prisma/client";
 import { randomUUID } from "crypto";
-import { decryptProtectedAmount } from "../common/crypto/protected-amount";
+import { PaymentEncryptionKeyringService } from "../common/crypto/payment-encryption-keyring.service";
 import { PrismaService } from "../database/prisma.service";
 import { WebhookEnvelope, WebhookEventType } from "./webhook-event.types";
 import { WebhookSigningService } from "./webhook-signing.service";
@@ -45,7 +45,7 @@ type WebhookChain = { tail: Promise<void> };
 @Injectable()
 export class WebhookDeliveryService implements OnModuleInit {
   private readonly logger = new Logger(WebhookDeliveryService.name);
-  private readonly encryptionKey: string;
+  private readonly paymentEncryptionKeyring: PaymentEncryptionKeyringService;
 
   /**
    * Per-webhook serialization chains.
@@ -58,7 +58,9 @@ export class WebhookDeliveryService implements OnModuleInit {
     private readonly signing: WebhookSigningService,
     configService: ConfigService,
   ) {
-    this.encryptionKey = configService.getOrThrow<string>("paymentEncryptionKey");
+    this.paymentEncryptionKeyring = new PaymentEncryptionKeyringService(
+      configService,
+    );
   }
 
   /**
@@ -310,7 +312,7 @@ export class WebhookDeliveryService implements OnModuleInit {
     // Decrypt signing secret — never stored in plain text or in delivery logs.
     let signingSecret: string;
     try {
-      signingSecret = decryptProtectedAmount(secretEncrypted, this.encryptionKey);
+      signingSecret = this.paymentEncryptionKeyring.decrypt(secretEncrypted);
     } catch (err) {
       this.logger.error(
         `Failed to decrypt signing secret for webhook ${delivery.webhook.id}: ${String(err)}`,
