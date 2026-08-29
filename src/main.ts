@@ -10,7 +10,23 @@ import { ApiErrorDto, FieldViolationDto } from "./common/dto/api-error.dto";
 import { HealthService } from "./health/health.service";
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  let app;
+
+  try {
+    // ── Configuration validation happens during module initialization ──
+    // The validateEnv() hook in AppModule runs immediately, checking both
+    // individual field constraints and cross-variable invariants. If validation
+    // fails, NestFactory.create() throws and execution never reaches app.listen().
+    app = await NestFactory.create(AppModule);
+  } catch (error) {
+    // ── FAIL FAST: Configuration errors prevent startup entirely ──
+    // This ensures the server never listens with bad configuration.
+    const logger = new Logger("Bootstrap");
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(`Configuration validation failed: ${message}`);
+    process.exit(1);
+  }
+
   const configService = app.get(ConfigService);
   const port = configService.getOrThrow<number>("port");
 
