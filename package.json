@@ -21,12 +21,13 @@
     "prisma:studio": "prisma studio"
   },
   "dependencies": {
+    "@nestjs/cli": "^11.0.14",
     "@nestjs/common": "^11.1.9",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.1.9",
-    "@nestjs/cli": "^11.0.14",
     "@nestjs/platform-express": "^11.1.9",
     "@nestjs/swagger": "11.4.6",
+    "@nestjs/throttler": "^6.5.0",
     "@prisma/client": "^6.19.3",
     "@stellar/stellar-base": "^15.0.0",
     "@stellar/stellar-sdk": "16.2.0",
@@ -45,6 +46,7 @@
     "@nestjs/testing": "^11.1.9",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.10.2",
+    "@types/supertest": "^7.2.1",
     "@typescript-eslint/eslint-plugin": "^8.50.0",
     "@typescript-eslint/parser": "^8.50.0",
     "eslint": "^9.39.2",

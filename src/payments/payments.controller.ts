@@ -9,6 +9,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
+import { SkipThrottle, Throttle } from "@nestjs/throttler";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { AuthGuard } from "../common/guards/auth.guard";
 import { AuthenticatedUser } from "../auth/auth.types";
@@ -23,6 +24,12 @@ import { PaymentsService } from "./payments.service";
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
+  // Payment sync hits Stellar Horizon and writes a batch of records — the
+  // other "expensive operation" the issue calls out alongside proof
+  // creation. Same "strict" tier, same SkipThrottle reasoning as
+  // ProofsController.createMinimumIncomeProof.
+  @SkipThrottle({ default: true, verification: true })
+  @Throttle({ strict: {} })
   @Post("sync")
   syncPayments(@CurrentUser() user: AuthenticatedUser) {
     return this.paymentsService.syncPayments(user);
