@@ -1,4 +1,9 @@
-import { Injectable, Optional, ServiceUnavailableException } from "@nestjs/common";
+import {
+  HttpStatus,
+  Injectable,
+  Optional,
+  ServiceUnavailableException,
+} from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
   HorizonClient,
@@ -7,6 +12,7 @@ import {
   HorizonReadResult,
 } from "./horizon-client";
 import { HorizonTransactionRecord, NormalizedPayment } from "./stellar.types";
+import { HorizonException } from "../common/exceptions/domain.exceptions";
 
 @Injectable()
 export class StellarService {
@@ -79,7 +85,15 @@ export class StellarService {
     );
 
     if (!response.ok) {
-      throw new Error(`Stellar Horizon request failed with ${response.status}`);
+      // Never echo the response body — Horizon errors can include the raw
+      // request path/params, which for this endpoint includes the
+      // transaction hash but could carry more in other Horizon error shapes.
+      throw new HorizonException(
+        "Stellar Horizon is temporarily unavailable",
+        response.status === 404
+          ? HttpStatus.NOT_FOUND
+          : HttpStatus.SERVICE_UNAVAILABLE,
+      );
     }
 
     const transaction = (await response.json()) as HorizonTransactionRecord;
