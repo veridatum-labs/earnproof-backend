@@ -40,9 +40,9 @@ describe("Configuration Validation (env.validation.ts)", () => {
 
       const result = validateEnv(config);
 
-      expect(result.nodeEnv).toBe("development");
-      expect(result.port).toBe(4000);
-      expect(result.databaseUrl).toBe(config.DATABASE_URL);
+      expect(result.NODE_ENV).toBe("development");
+      expect(result.PORT).toBe(4000);
+      expect(result.DATABASE_URL).toBe(config.DATABASE_URL);
     });
 
     it("applies all defaults for optional fields", () => {
@@ -57,12 +57,12 @@ describe("Configuration Validation (env.validation.ts)", () => {
 
       const result = validateEnv(config);
 
-      expect(result.port).toBe(4000);
-      expect(result.appUrl).toBe("http://localhost:3000");
-      expect(result.apiUrl).toBe("http://localhost:4000");
-      expect(result.stellar.network).toBe("testnet");
-      expect(result.verificationEventRetentionDays).toBe(90);
-      expect(result.auth.rateLimits.maxChallengeCreations).toBe(10);
+      expect(result.PORT).toBe(4000);
+      expect(result.APP_URL).toBe("http://localhost:3000");
+      expect(result.API_URL).toBe("http://localhost:4000");
+      expect(result.STELLAR_NETWORK).toBe("testnet");
+      expect(result.VERIFICATION_EVENT_RETENTION_DAYS).toBe(90);
+      expect(result.AUTH_RATE_LIMIT_MAX_CHALLENGE_CREATIONS).toBe(10);
     });
 
     it("accepts non-HTTPS URLs in development", () => {
@@ -108,9 +108,9 @@ describe("Configuration Validation (env.validation.ts)", () => {
 
       const result = validateEnv(config);
 
-      expect(result.nodeEnv).toBe("production");
-      expect(result.appUrl).toBe("https://app.example.com");
-      expect(result.apiUrl).toBe("https://api.example.com");
+      expect(result.NODE_ENV).toBe("production");
+      expect(result.APP_URL).toBe("https://app.example.com");
+      expect(result.API_URL).toBe("https://api.example.com");
     });
 
     it("accepts production config with reasonable rate limits", () => {
@@ -210,7 +210,7 @@ describe("Configuration Validation (env.validation.ts)", () => {
       const secretValue = "this-is-a-real-secret-value-12345";
       const config = {
         ...baseConfig,
-        SESSION_SECRET: "tooshort",
+        SESSION_SECRET: "zq7x",
       };
 
       let errorMessage = "";
@@ -220,7 +220,7 @@ describe("Configuration Validation (env.validation.ts)", () => {
         errorMessage = error instanceof Error ? error.message : String(error);
       }
 
-      expect(errorMessage).not.toContain("tooshort");
+      expect(errorMessage).not.toContain(config.SESSION_SECRET);
       expect(errorMessage).not.toContain(secretValue);
       expect(errorMessage).toContain("SESSION_SECRET");
     });
@@ -264,8 +264,8 @@ describe("Configuration Validation (env.validation.ts)", () => {
       it("coerces string to number", () => {
         const config = { ...baseConfig, PORT: "4000" };
         const result = validateEnv(config);
-        expect(typeof result.port).toBe("number");
-        expect(result.port).toBe(4000);
+        expect(typeof result.PORT).toBe("number");
+        expect(result.PORT).toBe(4000);
       });
     });
 
@@ -390,8 +390,8 @@ describe("Configuration Validation (env.validation.ts)", () => {
         );
       });
 
-      it("accepts exactly 30 seconds", () => {
-        const config = { ...baseConfig, HEALTH_PROBE_TIMEOUT_MS: "30000" };
+      it("accepts exactly 25 seconds (invariant threshold)", () => {
+        const config = { ...baseConfig, HEALTH_PROBE_TIMEOUT_MS: "25000" };
         expect(() => validateEnv(config)).not.toThrow();
       });
     });
@@ -413,12 +413,12 @@ describe("Configuration Validation (env.validation.ts)", () => {
 
     it("fails when DATABASE_URL is not a valid URL", () => {
       const config = { ...baseConfig, DATABASE_URL: "not-a-url" };
-      expect(() => validateEnv(config)).toThrow(/DATABASE_URL.*valid URL/);
+      expect(() => validateEnv(config)).toThrow(/DATABASE_URL.*valid connection URL/);
     });
 
     it("fails when REDIS_URL is not a valid URL", () => {
       const config = { ...baseConfig, REDIS_URL: "invalid" };
-      expect(() => validateEnv(config)).toThrow(/REDIS_URL.*valid URL/);
+      expect(() => validateEnv(config)).toThrow(/REDIS_URL.*valid connection URL/);
     });
 
     it("fails when APP_URL is not a valid URL", () => {
@@ -464,7 +464,7 @@ describe("Configuration Validation (env.validation.ts)", () => {
     it("accepts valid PROOF_REGISTRY_CONTRACT_ID (C + 55 chars)", () => {
       const config = {
         ...baseConfig,
-        PROOF_REGISTRY_CONTRACT_ID: "CBLTPEEUUC426PLBIFR76UVJKV3JJGVESMGALBWQXISKUOJE56XEXLA",
+        PROOF_REGISTRY_CONTRACT_ID: "CBLTPEEUUC426PLBIFR76UVJKV3JJGVESMGALBWQXISKUOJE56XEXLAA",
       };
       expect(() => validateEnv(config)).not.toThrow();
     });
@@ -688,7 +688,7 @@ describe("Configuration Validation (env.validation.ts)", () => {
         ...baseConfig,
         CONTRACT_ANCHORING_REQUIRED: "true",
         PROOF_REGISTRY_CONTRACT_ID:
-          "CBLTPEEUUC426PLBIFR76UVJKV3JJGVESMGALBWQXISKUOJE56XEXLA",
+          "CBLTPEEUUC426PLBIFR76UVJKV3JJGVESMGALBWQXISKUOJE56XEXLAA",
         EARNPROOF_ISSUER_ADDRESS: "",
       };
       expect(() => validateEnv(config)).toThrow(
@@ -713,7 +713,7 @@ describe("Configuration Validation (env.validation.ts)", () => {
         AUTH_RATE_LIMIT_CHALLENGE_CREATION_WINDOW_MS: "7200000", // 2 hours
       };
       expect(() => validateEnv(config)).toThrow(
-        /AUTH_RATE_LIMIT_CHALLENGE_CREATION_WINDOW_MS.*exceed 1 hour.*production/,
+        /AUTH_RATE_LIMIT_CHALLENGE_CREATION_WINDOW_MS.*exceeds 1 hour.*production/,
       );
     });
 
@@ -806,15 +806,22 @@ describe("Configuration Validation (env.validation.ts)", () => {
     };
 
     describe("NODE_ENV", () => {
-      it("accepts development, test, and production", () => {
-        ["development", "test", "production"].forEach((env) => {
-          const config = { ...baseConfig, NODE_ENV: env };
+      it("accepts development, test, staging, and production", () => {
+        ["development", "test", "staging", "production"].forEach((env) => {
+          const config = {
+            ...baseConfig,
+            NODE_ENV: env,
+            APP_URL: "https://app.example.com",
+            API_URL: "https://api.example.com",
+            DATABASE_URL: "postgresql://user:pass@db.example.com:5432/db",
+            REDIS_URL: "redis://redis.example.com:6379",
+          };
           expect(() => validateEnv(config)).not.toThrow();
         });
       });
 
       it("fails on invalid NODE_ENV", () => {
-        const config = { ...baseConfig, NODE_ENV: "staging" };
+        const config = { ...baseConfig, NODE_ENV: "preview" };
         expect(() => validateEnv(config)).toThrow(/NODE_ENV/);
       });
     });
@@ -890,9 +897,50 @@ describe("Configuration Validation (env.validation.ts)", () => {
     it("uses defaults for optional fields when missing", () => {
       const config = { ...baseConfig };
       const result = validateEnv(config);
-      expect(result.contractAnchoring.enabled).toBe(false);
-      expect(result.contractAnchoring.required).toBe(false);
-      expect(result.issuerRegistry.enabled).toBe(false);
+      expect(result.CONTRACT_ANCHORING_ENABLED).toBe("false");
+      expect(result.CONTRACT_ANCHORING_REQUIRED).toBe("false");
+      expect(result.ISSUER_REGISTRY_ENABLED).toBe("false");
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // VERSIONED VERIFICATION HASH SALTS (VERIFICATION_HASH_SALT_V*)
+  // ──────────────────────────────────────────────────────────────────────
+
+  describe("VERIFICATION_HASH_SALT_V* (dynamically numbered)", () => {
+    const baseConfig = {
+      NODE_ENV: "development",
+      DATABASE_URL: "postgresql://user:pass@localhost:5432/db",
+      REDIS_URL: "redis://localhost:6379",
+      SESSION_SECRET: "dev-session-secret-8-chars",
+      CREDENTIAL_SIGNING_SECRET: "dev-cred-secret-8-chars",
+      PAYMENT_ENCRYPTION_KEY: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    };
+
+    it("accepts valid versioned salts", () => {
+      const config = {
+        ...baseConfig,
+        VERIFICATION_HASH_SALT_VERSION: "1",
+        VERIFICATION_HASH_SALT_V0: "a-sufficiently-long-salt-value-0",
+        VERIFICATION_HASH_SALT_V1: "a-sufficiently-long-salt-value-1",
+      };
+      expect(() => validateEnv(config)).not.toThrow();
+    });
+
+    it("rejects a salt shorter than the minimum length", () => {
+      const config = {
+        ...baseConfig,
+        VERIFICATION_HASH_SALT_V0: "short",
+      };
+      expect(() => validateEnv(config)).toThrow(/VERIFICATION_HASH_SALT_V0/);
+    });
+
+    it("ignores empty-string salt values (treated as absent)", () => {
+      const config = {
+        ...baseConfig,
+        VERIFICATION_HASH_SALT_V0: "",
+      };
+      expect(() => validateEnv(config)).not.toThrow();
     });
   });
 });
