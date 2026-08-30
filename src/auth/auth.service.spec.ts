@@ -294,8 +294,6 @@ describe("AuthService.verifyChallenge", () => {
     const prisma = makePrismaMock();
     // The guarded consume matches nothing, and the challenge turns out to
     // already carry a usedAt: that is a replay, not an expiry.
-    prisma.walletChallenge.updateMany.mockResolvedValue({ count: 0 });
-    prisma.walletChallenge.findFirst.mockResolvedValue({
     // The atomic consumption update matches 0 rows (already used), and the
     // replay-detection lookup finds the challenge with usedAt already set.
     prisma.walletChallenge.updateMany.mockResolvedValueOnce({ count: 0 });
