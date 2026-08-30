@@ -1,4 +1,9 @@
-import { Injectable, Logger } from "@nestjs/common";
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
 import { ApiKeyScope, ResourceStatus } from "@prisma/client";
 import { randomBytes, timingSafeEqual } from "crypto";
 import { sha256 } from "../common/crypto/hash";
@@ -262,7 +267,7 @@ export class ApiKeyService {
 
     // Verify organization ownership
     if (apiKey.organizationId !== organizationId) {
-      throw new Error("Key does not belong to this organization");
+      throw new ForbiddenException("Key does not belong to this organization");
     }
 
     // Audit log: API key rotated (never log secrets or hashes)
@@ -313,7 +318,7 @@ export class ApiKeyService {
     });
 
     if (!apiKey) {
-      throw new Error("Key not found");
+      throw new NotFoundException("Key not found");
     }
 
     await this.prisma.apiKey.update({
