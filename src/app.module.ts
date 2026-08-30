@@ -7,6 +7,7 @@ import { DatabaseModule } from "./database/database.module";
 import { HealthModule } from "./health/health.module";
 import { PaymentsModule } from "./payments/payments.module";
 import { ProofsModule } from "./proofs/proofs.module";
+import { RateLimitModule } from "./common/rate-limit/rate-limit.module";
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { ProofsModule } from "./proofs/proofs.module";
     }),
     DatabaseModule,
     AuthModule,
+    RateLimitModule,
     HealthModule,
     PaymentsModule,
     ProofsModule,

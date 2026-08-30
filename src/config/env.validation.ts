@@ -42,6 +42,16 @@ const envSchema = z.object({
     z.string().regex(/^G[A-Z2-7]{55}$/),
   ),
   EARNPROOF_SCHEMA_VERSION: z.coerce.number().int().positive().optional(),
+  RATE_LIMIT_DEFAULT_TTL_MS: z.coerce.number().int().positive().optional(),
+  RATE_LIMIT_DEFAULT_LIMIT: z.coerce.number().int().positive().optional(),
+  RATE_LIMIT_STRICT_TTL_MS: z.coerce.number().int().positive().optional(),
+  RATE_LIMIT_STRICT_LIMIT: z.coerce.number().int().positive().optional(),
+  RATE_LIMIT_VERIFICATION_TTL_MS: z.coerce.number().int().positive().optional(),
+  RATE_LIMIT_VERIFICATION_LIMIT: z.coerce.number().int().positive().optional(),
+  RATE_LIMIT_AUTHENTICATED_MULTIPLIER: z.coerce
+    .number()
+    .positive()
+    .optional(),
 });
 
 export function validateEnv(config: Record<string, unknown>) {
