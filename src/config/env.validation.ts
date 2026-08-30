@@ -23,11 +23,12 @@ import { z } from "zod";
  */
 
 // ── Helper: Preprocess empty strings to undefined ──
-const optionalString = (schema: z.ZodString) =>
-  z.preprocess(
+function optionalString<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess(
     (value) => (value === "" ? undefined : value),
     schema.optional(),
   );
+}
 
 // ── Helper: SECRET variable validator (never expose value in error) ──
 const secret = (minLength: number = 1) =>
@@ -44,7 +45,7 @@ const secret = (minLength: number = 1) =>
 const cronExpression = z
   .string()
   .regex(
-    /^(\*|[0-9,\-\/]+)\s+(\*|[0-9,\-\/]+)\s+(\*|[0-9,\-\/]+)\s+(\*|[0-9,\-\/]+)\s+(\*|[0-9,\-\/]+)(?:\s+(\*|[0-9,\-\/]+))?$/,
+    /^(\*|[0-9,/-]+)\s+(\*|[0-9,/-]+)\s+(\*|[0-9,/-]+)\s+(\*|[0-9,/-]+)\s+(\*|[0-9,/-]+)(?:\s+(\*|[0-9,/-]+))?$/,
     "CRON_VARIABLE must be a valid cron expression (5 or 6 space-separated fields)",
   );
 
@@ -136,7 +137,7 @@ const envSchema = z.object({
 
   /** Application runtime environment: development, test, or production */
   NODE_ENV: z
-    .enum(["development", "test", "production"])
+    .enum(["development", "test", "staging", "production"])
     .default("development"),
 
   /** HTTP server port (1–65535, but typically 3000–4000) */
@@ -402,6 +403,18 @@ const envSchema = z.object({
  * - Include a detailed comment explaining the risk
  * - Reference the environment variables by key name only (never expose values)
  */
+// ── Helper: Extract hostname from a connection URL, robust to userinfo ──
+// (e.g. "postgresql://user:pass@127.0.0.1:5432/db") which a naive regex on
+// "//" up to the next ":" would mistake the username for the host.
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
+function isLocalhostUrl(value: string): boolean {
+  try {
+    return LOCAL_HOSTS.has(new URL(value).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function checkCrossVariableInvariants(data: z.infer<typeof envSchema>) {
   const errors: string[] = [];
 
@@ -428,11 +441,7 @@ function checkCrossVariableInvariants(data: z.infer<typeof envSchema>) {
     // Risk: Connecting to "localhost" in production means the database is
     // not remotely accessible (good) but indicates misconfiguration; operator
     // likely meant to set a remote host. Catch this early.
-    const dbHostMatch = data.DATABASE_URL.match(/\/\/([^:/@]+)/);
-    if (
-      dbHostMatch &&
-      ["localhost", "127.0.0.1", "0.0.0.0"].includes(dbHostMatch[1])
-    ) {
+    if (isLocalhostUrl(data.DATABASE_URL)) {
       errors.push(
         "Invalid configuration: DATABASE_URL appears to be localhost in production profile (likely misconfigured)",
       );
@@ -440,11 +449,7 @@ function checkCrossVariableInvariants(data: z.infer<typeof envSchema>) {
 
     // Invariant: Redis URL must not be localhost
     // Risk: Same as database — remote Redis access required in production.
-    const redisHostMatch = data.REDIS_URL.match(/\/\/([^:/@]+)/);
-    if (
-      redisHostMatch &&
-      ["localhost", "127.0.0.1", "0.0.0.0"].includes(redisHostMatch[1])
-    ) {
+    if (isLocalhostUrl(data.REDIS_URL)) {
       errors.push(
         "Invalid configuration: REDIS_URL appears to be localhost in production profile (likely misconfigured)",
       );
@@ -557,9 +562,7 @@ function checkCrossVariableInvariants(data: z.infer<typeof envSchema>) {
   // ────────────────────────────────────────────────────────────────────────
 
   if (errors.length > 0) {
-    throw new Error(
-      `Configuration validation failed:\n${errors.map((e) => `  - ${e}`).join("\n")}`,
-    );
+    throw new Error(`Configuration validation failed: ${errors.join("; ")}`);
   }
 }
 
@@ -574,12 +577,58 @@ function checkCrossVariableInvariants(data: z.infer<typeof envSchema>) {
  * @returns Typed and validated configuration object
  * @throws Error if validation fails (causes immediate process exit)
  */
+/**
+ * Matches versioned verification hash salt keys: VERIFICATION_HASH_SALT_V0,
+ * VERIFICATION_HASH_SALT_V1, etc. These are dynamically numbered (see
+ * VerificationEventService, which loads VERIFICATION_HASH_SALT_V{n} for
+ * n = 0.. until it hits a gap) so they cannot be listed individually in the
+ * schema. Validated separately: any key matching this pattern must be a
+ * non-empty string of reasonable length if present at all.
+ */
+const VERIFICATION_HASH_SALT_KEY_PATTERN = /^VERIFICATION_HASH_SALT_V\d+$/;
+
+const versionedSalt = z
+  .string()
+  .min(16, "must be at least 16 characters (used as an HMAC salt)");
+
+/**
+ * Validates VERIFICATION_HASH_SALT_V* keys, which are not part of the fixed
+ * envSchema shape since their count/numbering is operator-controlled.
+ * Returns field-level error strings (empty array if all valid).
+ */
+function validateVersionedSalts(config: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  for (const key of Object.keys(config)) {
+    if (!VERIFICATION_HASH_SALT_KEY_PATTERN.test(key)) continue;
+    const value = config[key];
+    if (value === undefined || value === "") continue; // treat as absent
+    const result = versionedSalt.safeParse(value);
+    if (!result.success) {
+      errors.push(`${key} ${result.error.issues[0]?.message ?? "is invalid"}`);
+    }
+  }
+  return errors;
+}
+
 export function validateEnv(config: Record<string, unknown>) {
   const parsed = envSchema.safeParse(config);
 
   if (!parsed.success) {
-    // Zod error includes detailed field-level issues
-    throw new Error(`Invalid environment: ${parsed.error.message}`);
+    // Format each issue as a single readable line naming the offending
+    // variable, so error messages stay grep-able and match-able (zod v4's
+    // raw error.message is multi-line JSON, which is hard to read and hard
+    // to test against with a single regex).
+    const details = parsed.error.issues
+      .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+      .join("; ");
+    throw new Error(`Invalid environment: ${details}`);
+  }
+
+  const saltErrors = validateVersionedSalts(config);
+  if (saltErrors.length > 0) {
+    throw new Error(
+      `Invalid environment:\n${saltErrors.map((e) => `  - ${e}`).join("\n")}`,
+    );
   }
 
   // Check cross-variable invariants after individual field validation

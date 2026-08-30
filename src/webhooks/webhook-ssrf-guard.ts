@@ -69,7 +69,7 @@ export async function assertSafeWebhookDestination(
 
   const addresses = await resolve(host, { all: true, verbatim: true });
   if (addresses.length === 0) {
-    throw new Error("Webhook destination did not resolve");
+    throw new SsrfBlockedError(`destination ${host} did not resolve`);
   }
   for (const { address } of addresses) {
     if (isBlockedHost(address)) {
