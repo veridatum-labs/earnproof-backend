@@ -1,10 +1,17 @@
-import { ClassSerializerInterceptor, Logger, ValidationPipe } from "@nestjs/common";
+import { Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
 import { configureApp } from "./bootstrap";
 import { ApiErrorDto, FieldViolationDto } from "./common/dto/api-error.dto";
+import {
+  API_KEY_AUTH_SCHEME,
+  API_KEY_AUTH_SCHEME_DEFINITION,
+  GLOBAL_API_RESPONSES,
+  SESSION_AUTH_SCHEME,
+  SESSION_AUTH_SCHEME_DEFINITION,
+} from "./common/swagger/security-schemes";
 import { HealthService } from "./health/health.service";
 
 async function bootstrap() {
@@ -51,22 +58,25 @@ async function bootstrap() {
       "The `code` field is stable across minor versions. Branch on `code`, not `message`.\n\n" +
       "## Request IDs\n" +
       "Pass `X-Request-ID` with any request to correlate logs. " +
-      "A generated ID is returned in the `X-Request-ID` response header when none is supplied.",
+      "A generated ID is returned in the `X-Request-ID` response header when none is supplied.\n\n" +
+      "## Authentication\n" +
+      "Two credentials exist and are not interchangeable.\n\n" +
+      "- **Session token** — a wallet holder authenticates with `POST /api/v1/auth/verify` " +
+      "and sends `Authorization: Bearer <token>`. Used by the dashboard and by anything " +
+      "acting on behalf of a person.\n" +
+      "- **API key** — a machine integration sends `Authorization: Bearer <secret>` " +
+      "together with `X-Organization-Id`, and is limited to the scopes the key was " +
+      "created with. Start at `GET /api/v1/integrations/auth-context` to confirm a key " +
+      "works and see its scopes.\n\n" +
+      "Public routes — credential verification and proof verification — take neither.",
     )
     .setVersion("0.1.0")
-    .addBearerAuth(
-      {
-        type: "http",
-        scheme: "bearer",
-        bearerFormat: "Opaque session token",
-        description:
-          "Bearer token obtained from `POST /api/v1/auth/verify`. " +
-          "Include as `Authorization: Bearer <token>`.",
-      },
-      // The security scheme name must match the argument passed to @ApiBearerAuth()
-      // decorators (default is 'bearer' when no name is given).
-      "bearer",
-    )
+    // The security scheme name must match the argument passed to @ApiBearerAuth()
+    // decorators (default is 'bearer' when no name is given), so both ends read
+    // it from `common/swagger/security-schemes.ts`.
+    .addBearerAuth(SESSION_AUTH_SCHEME_DEFINITION, SESSION_AUTH_SCHEME)
+    .addBearerAuth(API_KEY_AUTH_SCHEME_DEFINITION, API_KEY_AUTH_SCHEME)
+    .addGlobalResponse(...GLOBAL_API_RESPONSES)
     .build();
 
   const document = SwaggerModule.createDocument(app, documentConfig, {
