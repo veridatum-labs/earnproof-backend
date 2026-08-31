@@ -1,3 +1,4 @@
+import { ApiProperty } from "@nestjs/swagger";
 import { IsObject } from "class-validator";
 import { MaxBytes, MaxDepth } from "../../common/validation/payload-limits";
 
@@ -14,6 +15,14 @@ const MAX_PAYLOAD_BYTES = 32 * 1024; // 32 KB
 const MAX_PAYLOAD_DEPTH = 5;
 
 export class VerifyCredentialDto {
+  @ApiProperty({
+    type: "object",
+    additionalProperties: true,
+    description:
+      "The credential document as issued, including its `proof` block. At most " +
+      `${MAX_PAYLOAD_BYTES / 1024} KB and ${MAX_PAYLOAD_DEPTH} levels of nesting; ` +
+      "larger or deeper submissions are refused before verification runs.",
+  })
   @IsObject()
   @MaxBytes(MAX_PAYLOAD_BYTES)
   @MaxDepth(MAX_PAYLOAD_DEPTH)
