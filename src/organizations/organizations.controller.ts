@@ -15,6 +15,7 @@ import {
   ApiResponse,
 } from "@nestjs/swagger";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { RequiredRole } from "../common/decorators/required-role.decorator";
 import { AuthGuard } from "../common/guards/auth.guard";
 import { RoleGuard } from "../common/guards/role.guard";
@@ -52,6 +53,11 @@ export class OrganizationsController {
     status: 403,
     description: "Unauthorized - admin role required",
   })
+  @ApiResponse({
+    status: 401,
+    description: "Session token is missing, malformed, invalid, or expired",
+    type: ApiErrorDto,
+  })
   createOrganization(
     @CurrentUser() user: AuthenticatedUser,
     @Body() input: CreateOrganizationDto,
@@ -69,6 +75,11 @@ export class OrganizationsController {
   @ApiResponse({
     status: 200,
     description: "Organizations retrieved successfully",
+  })
+  @ApiResponse({
+    status: 401,
+    description: "Session token is missing, malformed, invalid, or expired",
+    type: ApiErrorDto,
   })
   listOrganizations(
     @CurrentUser() user: AuthenticatedUser,
@@ -92,6 +103,11 @@ export class OrganizationsController {
   @ApiResponse({
     status: 404,
     description: "Organization not found",
+  })
+  @ApiResponse({
+    status: 401,
+    description: "Session token is missing, malformed, invalid, or expired",
+    type: ApiErrorDto,
   })
   getOrganization(
     @CurrentUser() user: AuthenticatedUser,
@@ -119,6 +135,11 @@ export class OrganizationsController {
   @ApiResponse({
     status: 403,
     description: "Unauthorized - not creator or admin",
+  })
+  @ApiResponse({
+    status: 401,
+    description: "Session token is missing, malformed, invalid, or expired",
+    type: ApiErrorDto,
   })
   updateOrganization(
     @CurrentUser() user: AuthenticatedUser,
