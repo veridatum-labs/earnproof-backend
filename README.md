@@ -116,6 +116,12 @@ new ADR is required.
 verifying signed webhook deliveries, backed by frozen conformance vectors and a
 runnable reference receiver (`npm run webhook:conformance`).
 
+[`docs/api-keys-guide.md`](docs/api-keys-guide.md) is the integrator-facing guide
+to machine-to-machine authentication: creating a key, the two headers it is
+presented with, what each scope grants, rotating without dropping traffic,
+revocation, rate limiting, and how to store a secret that is only ever shown
+once.
+
 Start there before adding a module, moving a table, or introducing an
 unauthenticated endpoint.
 
