@@ -148,6 +148,33 @@ Swagger docs:
 http://localhost:4000/docs
 ```
 
+## Container Deployment
+
+A production image is defined by [`Dockerfile`](Dockerfile): a multi-stage build
+that compiles the application with the full toolchain, installs runtime
+dependencies separately with `npm ci --omit=dev`, and ships only `dist/`, the
+pruned `node_modules`, and the Prisma schema. It runs as the non-root `node`
+user and declares a health check against `/api/v1/health`.
+
+```bash
+docker build -t earnproof-api:local .
+
+docker run --rm -p 4000:4000 --env-file production.env earnproof-api:local
+
+curl http://localhost:4000/api/v1/health
+```
+
+`production.env` above is an uncommitted file holding the five required secrets
+and connection strings; `-e` flags work equally well.
+
+[`docs/deployment.md`](docs/deployment.md) documents every environment variable
+and its default, how to run the image against the Compose services, how to apply
+migrations from the same artefact, which probe an orchestrator should use, and
+the security properties of the image.
+
+Note that `docker compose up -d` starts PostgreSQL and Redis for local
+development only. It does not build or run the API.
+
 ## Environment Variables
 
 ```env
