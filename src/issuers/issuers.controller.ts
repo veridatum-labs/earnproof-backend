@@ -15,6 +15,7 @@ import {
   ApiResponse,
 } from "@nestjs/swagger";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { RequiredRole } from "../common/decorators/required-role.decorator";
 import { AuthGuard } from "../common/guards/auth.guard";
 import { RoleGuard } from "../common/guards/role.guard";
@@ -65,6 +66,11 @@ export class IssuersController {
     status: 400,
     description: "Invalid Stellar address format",
   })
+  @ApiResponse({
+    status: 401,
+    description: "Session token is missing, malformed, invalid, or expired",
+    type: ApiErrorDto,
+  })
   createIssuer(
     @CurrentUser() user: AuthenticatedUser,
     @Body() input: CreateIssuerDto,
@@ -93,6 +99,11 @@ export class IssuersController {
   @ApiResponse({
     status: 403,
     description: "Unauthorized - admin role required",
+  })
+  @ApiResponse({
+    status: 401,
+    description: "Session token is missing, malformed, invalid, or expired",
+    type: ApiErrorDto,
   })
   updateIssuerMetadata(
     @CurrentUser() user: AuthenticatedUser,
@@ -128,6 +139,11 @@ export class IssuersController {
     status: 403,
     description: "Unauthorized - admin role required",
   })
+  @ApiResponse({
+    status: 401,
+    description: "Session token is missing, malformed, invalid, or expired",
+    type: ApiErrorDto,
+  })
   updateIssuerStatus(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") issuerId: string,
@@ -158,6 +174,11 @@ export class IssuersController {
     status: 403,
     description: "Unauthorized - admin role required",
   })
+  @ApiResponse({
+    status: 401,
+    description: "Session token is missing, malformed, invalid, or expired",
+    type: ApiErrorDto,
+  })
   syncIssuerStatus(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") issuerId: string,
@@ -174,6 +195,11 @@ export class IssuersController {
   @ApiResponse({
     status: 200,
     description: "Issuers retrieved successfully",
+  })
+  @ApiResponse({
+    status: 400,
+    description: "Invalid pagination or filter parameters",
+    type: ApiErrorDto,
   })
   listIssuersPublic(@Query() query: ListIssuersDto) {
     return this.issuersService.listIssuersPublic(query);
@@ -201,6 +227,11 @@ export class IssuersController {
     status: 403,
     description: "Unauthorized - admin role required",
   })
+  @ApiResponse({
+    status: 401,
+    description: "Session token is missing, malformed, invalid, or expired",
+    type: ApiErrorDto,
+  })
   getIssuer(@Param("id") issuerId: string) {
     return this.issuersService.getIssuer(issuerId);
   }
@@ -217,6 +248,16 @@ export class IssuersController {
   @ApiResponse({
     status: 200,
     description: "Issuers retrieved successfully",
+  })
+  @ApiResponse({
+    status: 401,
+    description: "Session token is missing, malformed, invalid, or expired",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: 403,
+    description: "Unauthorized - admin role required",
+    type: ApiErrorDto,
   })
   listIssuersAdmin(@Query() query: ListIssuersDto) {
     return this.issuersService.listIssuers(query);

@@ -1,4 +1,10 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Prisma, WebhookDeliveryStatus } from "@prisma/client";
 import { randomUUID } from "crypto";
@@ -180,11 +186,13 @@ export class WebhookDeliveryService implements OnModuleInit {
     });
 
     if (!original) {
-      throw new Error("WebhookDelivery not found");
+      throw new NotFoundException("WebhookDelivery not found");
     }
 
     if (original.webhook.status !== "ACTIVE") {
-      throw new Error("Cannot replay delivery for a disabled webhook endpoint");
+      throw new BadRequestException(
+        "Cannot replay delivery for a disabled webhook endpoint",
+      );
     }
 
     const replayKey = `${originalDeliveryId}:${replayedBy}`;
