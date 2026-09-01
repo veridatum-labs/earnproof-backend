@@ -1,5 +1,7 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { IsObject } from "class-validator";
+import { FIELD_LIMITS } from "../../common/limits/request-limits";
+import { MaxBytes, MaxDepth } from "../../common/validation/payload-limits";
 
 export class UpdateIssuerMetadataDto {
   @ApiProperty({
@@ -13,5 +15,7 @@ export class UpdateIssuerMetadataDto {
     },
   })
   @IsObject()
+  @MaxBytes(FIELD_LIMITS.metadataBytes)
+  @MaxDepth(FIELD_LIMITS.metadataDepth)
   publicMetadata: Record<string, any>;
 }

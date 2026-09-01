@@ -27,6 +27,9 @@ export const configuration = () => ({
       process.env.AUTH_CHALLENGE_RETENTION_DAYS ?? 7,
     ),
     auditRetentionDays: Number(process.env.AUTH_AUDIT_RETENTION_DAYS ?? 90),
+    sessionCleanupCron: process.env.AUTH_SESSION_CLEANUP_CRON ?? "0 0 * * *",
+    challengeCleanupCron: process.env.AUTH_CHALLENGE_CLEANUP_CRON ?? "0 2 * * *",
+    auditCleanupCron: process.env.AUTH_AUDIT_CLEANUP_CRON ?? "0 3 * * *",
     rateLimits: {
       maxChallengeCreations: Number(
         process.env.AUTH_RATE_LIMIT_MAX_CHALLENGE_CREATIONS ?? 10,
@@ -66,5 +69,20 @@ export const configuration = () => ({
     stellarCliPath: process.env.STELLAR_CLI_PATH ?? "stellar",
     source: process.env.STELLAR_CLI_SOURCE,
     contractId: process.env.ISSUER_REGISTRY_CONTRACT_ID,
+  },
+  retention: {
+    walletChallengeDays: Number(
+      process.env.RETENTION_WALLET_CHALLENGE_DAYS ?? 7,
+    ),
+    authSessionDays: Number(process.env.RETENTION_AUTH_SESSION_DAYS ?? 30),
+    webhookDeliveryDays: Number(
+      process.env.RETENTION_WEBHOOK_DELIVERY_DAYS ?? 30,
+    ),
+    auditLogDays: Number(process.env.RETENTION_AUDIT_LOG_DAYS ?? 365),
+    failedAnchoringDays: Number(
+      process.env.RETENTION_FAILED_ANCHORING_DAYS ?? 90,
+    ),
+    cleanupCron: process.env.RETENTION_CLEANUP_CRON ?? "0 3 * * *",
+    dryRun: process.env.RETENTION_DRY_RUN === "true",
   },
 });
