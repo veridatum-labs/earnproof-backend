@@ -1,3 +1,21 @@
+/**
+ * Collects PAYMENT_ENCRYPTION_KEY_V0, _V1, ... into an indexed object
+ * (`{ 0: "...", 1: "..." }`) for the payment-encryption keyring service.
+ * Loads until the first gap, same convention as VERIFICATION_HASH_SALT_V*.
+ */
+function loadPaymentEncryptionKeyVersions(): Record<number, string> {
+  const versions: Record<number, string> = {};
+  for (let i = 0; i < 100; i++) {
+    const value = process.env[`PAYMENT_ENCRYPTION_KEY_V${i}`];
+    if (value) {
+      versions[i] = value;
+    } else {
+      break;
+    }
+  }
+  return versions;
+}
+
 export const configuration = () => ({
   nodeEnv: process.env.NODE_ENV ?? "development",
   port: Number(process.env.PORT ?? 4000),
@@ -16,6 +34,10 @@ export const configuration = () => ({
   sessionSecret: process.env.SESSION_SECRET,
   credentialSigningSecret: process.env.CREDENTIAL_SIGNING_SECRET,
   paymentEncryptionKey: process.env.PAYMENT_ENCRYPTION_KEY,
+  paymentEncryptionKeyVersions: loadPaymentEncryptionKeyVersions(),
+  paymentEncryptionKeyVersion: Number(
+    process.env.PAYMENT_ENCRYPTION_KEY_VERSION ?? 0,
+  ),
   verificationEventRetentionDays: Number(
     process.env.VERIFICATION_EVENT_RETENTION_DAYS ?? 90,
   ),
