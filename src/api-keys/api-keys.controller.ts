@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Post,
+  HttpStatus,
   Query,
   UseGuards,
   ForbiddenException,
@@ -12,6 +13,7 @@ import {
 } from "@nestjs/common";
 import {
   ApiBearerAuth,
+  ApiParam,
   ApiTags,
   ApiOperation,
   ApiResponse,
@@ -20,6 +22,8 @@ import { ApiKeyScope } from "@prisma/client";
 import { AuthGuard } from "../common/guards/auth.guard";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { AuthenticatedUser } from "../auth/auth.types";
+import { ApiErrorDto } from "../common/dto/api-error.dto";
+import { SESSION_AUTH_SCHEME } from "../common/swagger/security-schemes";
 import { ApiKeyService } from "./api-key.service";
 import { PrismaService } from "../database/prisma.service";
 import {
@@ -48,7 +52,7 @@ import {
  * - No code path allows retrieving or reconstructing the secret later
  * - If secret is lost, client must rotate the key to get a new one
  */
-@ApiBearerAuth()
+@ApiBearerAuth(SESSION_AUTH_SCHEME)
 @ApiTags("api-keys")
 @UseGuards(AuthGuard)
 @Controller("api-keys")
@@ -88,6 +92,23 @@ export class ApiKeysController {
         },
       },
     },
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Session token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.FORBIDDEN,
+    description:
+      "The caller is not an administrator of the organization named in the request.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.BAD_REQUEST,
+    description:
+      "`expiresAt` is not in the future, or `scopes` names a scope that does not exist.",
+    type: ApiErrorDto,
   })
   async createKey(
     @CurrentUser() user: AuthenticatedUser,
@@ -166,6 +187,17 @@ export class ApiKeysController {
       ],
     },
   })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Session token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.FORBIDDEN,
+    description:
+      "The caller is not an administrator of the organization named in the request.",
+    type: ApiErrorDto,
+  })
   async listKeys(
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: OrganizationApiKeysQueryDto = {},
@@ -229,6 +261,24 @@ export class ApiKeysController {
       },
     },
   })
+  @ApiParam({
+    name: "id",
+    description: "API key to rotate.",
+    example: "ckv8v6h2b0000qzrmn831i7rn",
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Session token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.FORBIDDEN,
+    description:
+      "The caller is not an administrator of the organization, or the key belongs " +
+      "to another organization. The two answer alike so the response cannot be " +
+      "used to discover which key identifiers exist.",
+    type: ApiErrorDto,
+  })
   async rotateKey(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") keyId: string,
@@ -287,6 +337,23 @@ export class ApiKeysController {
   @ApiResponse({
     status: 200,
     description: "API key revoked successfully",
+  })
+  @ApiParam({
+    name: "id",
+    description: "API key to revoke.",
+    example: "ckv8v6h2b0000qzrmn831i7rn",
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Session token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.FORBIDDEN,
+    description:
+      "The caller is not an administrator of the organization, the key belongs to " +
+      "another organization, or no such key exists.",
+    type: ApiErrorDto,
   })
   async revokeKey(
     @CurrentUser() user: AuthenticatedUser,
