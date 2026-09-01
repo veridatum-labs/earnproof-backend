@@ -33,6 +33,11 @@ jobs:
       # entry point is visible as a distinct failure — that command is what
       # integrators run, and it has to keep working on its own.
       - run: npm run webhook:conformance
+      # Fails on inventory drift (scripts/sbom/inventory.md out of sync with
+      # package.json / package-lock.json), a prohibited or unrecognized
+      # dependency license, a direct dependency missing a purpose annotation,
+      # or a broken link in docs/dependencies.md. See docs/dependencies.md.
+      - run: npm run sbom:check
       - run: npm run build
 
   integration:
