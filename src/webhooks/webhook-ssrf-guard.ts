@@ -1,66 +1,70 @@
 /**
  * SSRF protection for outbound webhook deliveries.
  *
- * Blocks delivery to:
- *   - Loopback addresses (127.0.0.0/8, ::1)
- *   - Private / RFC-1918 ranges (10.x, 172.16–31.x, 192.168.x)
- *   - Link-local (169.254.x.x, fe80::/10)
- *   - Cloud metadata endpoints (169.254.169.254, 100.100.100.200)
- *   - Unroutable / special-use (0.x, 100.64–127.x CGN, ::, fc00::/7)
- *   - Non-HTTPS schemes
+ * This module is the webhook-facing entry point. All destination-validation
+ * policy — scheme/port allowlisting, credential rejection, IP-range
+ * blocking, DNS-revalidation-at-connect-time — is centralised in
+ * `../common/http/destination-guard`; this file only re-exports it under the
+ * names the webhook call sites already use, plus a webhook-flavoured error
+ * type so existing `instanceof` checks keep working.
  *
- * Redirects: the fetch call uses `redirect: "error"` so any 3xx response
- * is treated as a failure rather than followed — this prevents an open
- * redirect from forwarding a signed payload to an internal address.
+ * See `../common/http/destination-guard.ts` for the full policy and its
+ * rationale.
  */
 
 import { lookup } from "node:dns/promises";
+import {
+  DestinationBlockedError,
+  assertSafeDestination,
+  assertSafeDestinationUrl,
+} from "../common/http/destination-guard";
 
-export class SsrfBlockedError extends Error {
+export class SsrfBlockedError extends DestinationBlockedError {
   constructor(reason: string) {
-    super(`SSRF: blocked destination — ${reason}`);
+    super(reason);
     this.name = "SsrfBlockedError";
+    // Keep the historical "SSRF" wording in the message — call sites and
+    // stored failure reasons match against it — while `reason` (inherited)
+    // still carries the plain, prefix-free explanation.
+    this.message = `SSRF: blocked destination — ${reason}`;
   }
 }
 
+function rethrowAsSsrfError(err: unknown): never {
+  if (err instanceof DestinationBlockedError) {
+    throw new SsrfBlockedError(err.reason);
+  }
+  throw err;
+}
+
 /**
- * Throw `SsrfBlockedError` if `url` targets a forbidden destination.
- * Call this before any outbound fetch.
+ * Throw `SsrfBlockedError` if `url` targets a forbidden destination on the
+ * URL/scheme/credential/host level. Does not perform DNS resolution — call
+ * `assertSafeWebhookDestination` for that immediately before delivering.
  */
 export function assertSafeWebhookUrl(raw: string): void {
-  let parsed: URL;
   try {
-    parsed = new URL(raw);
-  } catch {
-    throw new SsrfBlockedError("invalid URL");
-  }
-
-  if (parsed.protocol !== "https:") {
-    throw new SsrfBlockedError("only https:// destinations are permitted");
-  }
-  if (parsed.username || parsed.password) {
-    throw new SsrfBlockedError("URL credentials are not permitted");
-  }
-
-  const host = parsed.hostname.toLowerCase();
-
-  // Strip IPv6 brackets if present
-  const bare = host.startsWith("[") ? host.slice(1, -1) : host;
-
-  if (isBlockedHost(bare)) {
-    throw new SsrfBlockedError(`destination ${bare} is not routable`);
+    assertSafeDestinationUrl(raw);
+  } catch (err) {
+    rethrowAsSsrfError(err);
   }
 }
 
 /**
  * Resolve a hostname immediately before delivery and reject it when any
- * returned address is non-public. Checking every A/AAAA result prevents a
- * hostname from hiding an internal destination behind a public answer.
+ * returned address is non-public. Re-run this right before every delivery
+ * attempt and retry — not just once at enqueue time — so a hostname's
+ * resolved address is only ever trusted for the instant this function
+ * checked it (defeats DNS-rebinding / TOCTOU).
  */
 export async function assertSafeWebhookDestination(
   raw: string,
   resolve: typeof lookup = lookup,
 ): Promise<void> {
+  try {
+    await assertSafeDestination(raw, resolve);
+  } catch (err) {
+    rethrowAsSsrfError(err);
   assertSafeWebhookUrl(raw);
   const parsed = new URL(raw);
   const host = parsed.hostname.replace(/^\[|\]$/g, "");
@@ -69,7 +73,7 @@ export async function assertSafeWebhookDestination(
 
   const addresses = await resolve(host, { all: true, verbatim: true });
   if (addresses.length === 0) {
-    throw new Error("Webhook destination did not resolve");
+    throw new SsrfBlockedError(`destination ${host} did not resolve`);
   }
   for (const { address } of addresses) {
     if (isBlockedHost(address)) {
@@ -178,6 +182,4 @@ function isBlockedIPv6(addr: string): boolean {
     const v4Dotted = parseIPv4(mapped);
     if (v4Dotted !== null && isBlockedIPv4(v4Dotted)) return true;
   }
-
-  return false;
 }

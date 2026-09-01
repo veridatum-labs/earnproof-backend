@@ -101,6 +101,16 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       return this.classifyHttpException(exception);
     }
 
+    // ── Body-parser failures ─────────────────────────────────────────────────
+    // These arrive as plain errors from express middleware, not as
+    // HttpExceptions, so without this branch an oversized body would be
+    // reported as an internal error — telling the client nothing actionable and
+    // logging a 500 for what is ordinary, expected input.
+    const parserFailure = this.classifyBodyParserError(exception);
+    if (parserFailure) {
+      return parserFailure;
+    }
+
     // ── Prisma errors ────────────────────────────────────────────────────────
     if (exception instanceof Prisma.PrismaClientKnownRequestError) {
       return this.classifyPrismaKnown(exception);
@@ -205,6 +215,18 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       };
     }
 
+    if (status === HttpStatus.PAYLOAD_TOO_LARGE) {
+      return {
+        statusCode: HttpStatus.PAYLOAD_TOO_LARGE,
+        code: ApiErrorCode.PAYLOAD_TOO_LARGE,
+        // The exception's own message names the limit and never the payload;
+        // anything else is replaced rather than forwarded.
+        message:
+          this.extractSafeMessage(raw) ??
+          "The request exceeds the maximum permitted size.",
+      };
+    }
+
     if (status === HttpStatus.TOO_MANY_REQUESTS) {
       return {
         statusCode: HttpStatus.TOO_MANY_REQUESTS,
@@ -245,6 +267,51 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       code: ApiErrorCode.INTERNAL_ERROR,
       message: "An unexpected error occurred. Please try again later.",
     };
+  }
+
+  /**
+   * Classifies an error thrown by the body parser.
+   *
+   * `body-parser` tags its failures with a `type`, which is the only stable way
+   * to tell "the client sent 4 MB" from "the client sent malformed JSON" — the
+   * messages are not contractual. Neither response quotes the body: an error
+   * that echoes an oversized payload puts it into the log, which is the problem
+   * this whole boundary exists to avoid.
+   */
+  private classifyBodyParserError(exception: unknown):
+    | {
+        statusCode: number;
+        code: ApiErrorCode;
+        message: string;
+      }
+    | undefined {
+    if (!exception || typeof exception !== "object") return undefined;
+
+    const type = (exception as { type?: unknown }).type;
+    if (typeof type !== "string") return undefined;
+
+    if (type === "entity.too.large") {
+      return {
+        statusCode: HttpStatus.PAYLOAD_TOO_LARGE,
+        code: ApiErrorCode.PAYLOAD_TOO_LARGE,
+        message: "The request exceeds the maximum permitted size.",
+      };
+    }
+
+    if (
+      type === "entity.parse.failed" ||
+      type === "encoding.unsupported" ||
+      type === "charset.unsupported" ||
+      type === "request.aborted"
+    ) {
+      return {
+        statusCode: HttpStatus.BAD_REQUEST,
+        code: ApiErrorCode.INVALID_INPUT,
+        message: "The request body could not be read as JSON.",
+      };
+    }
+
+    return undefined;
   }
 
   private isStableErrorResponse(
