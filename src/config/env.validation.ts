@@ -196,6 +196,12 @@ const envSchema = z.object({
 
   /** Payment encryption key (32 bytes as hex or base64) */
   PAYMENT_ENCRYPTION_KEY: encryptionKey,
+  PAYMENT_ENCRYPTION_KEY_VERSION: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .default(0),
 
   // ──────────────────────────────────────────────────────────────────────
   // AUTHENTICATION RATE LIMITING

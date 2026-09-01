@@ -69,7 +69,7 @@ describe("PaymentsService", () => {
         create: expect.objectContaining({
           classification: PaymentClassification.UNKNOWN,
           isEligible: true,
-          amountEncrypted: expect.stringMatching(/^enc:v1:/),
+          amountEncrypted: expect.stringMatching(/^enc:v0:/),
           memo: {
             type: "text",
             value: "Salary June",
