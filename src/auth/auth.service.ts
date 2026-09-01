@@ -93,6 +93,9 @@ export class AuthService {
       input.clientMetadata,
     );
 
+    // Atomically mark the challenge as consumed only if it exists, is not used,
+    // and is not expired. This closes the TOCTOU window in which two concurrent
+    // requests could both pass an existence check before either marked it used.
     // Atomically mark challenge as consumed only if it exists, is not used, and is not expired.
     // This prevents TOCTOU race conditions where multiple concurrent requests could both
     // pass the existence check before any are marked as used.
@@ -100,8 +103,10 @@ export class AuthService {
       where: {
         id: input.challengeId,
         walletAddress: input.walletAddress,
-        usedAt: null,
-        expiresAt: { gt: new Date() },
+        usedAt: null, // Not yet consumed
+        expiresAt: {
+          gt: new Date(), // Not expired
+        },
       },
       data: {
         usedAt: new Date(),
@@ -109,6 +114,9 @@ export class AuthService {
     });
 
     if (consumedChallenge.count === 0) {
+      // Nothing was consumed: the challenge was already used (a replay), or it
+      // expired or never existed. The two are audited separately; both return
+      // the same message, so the caller learns nothing either way.
       // The atomic update matched nothing — either the challenge doesn't
       // exist, was already consumed (replay), or is expired. Distinguish
       // those for the audit trail with a read-only lookup; this happens
@@ -150,6 +158,7 @@ export class AuthService {
     }
 
     // Fetch the challenge again to get the message for signature verification.
+    // It is already marked used, so a failed verification cannot be retried.
     // The challenge is now marked as used, so even if verification fails, it cannot be reused.
     const challenge = await this.prisma.walletChallenge.findUnique({
       where: {
@@ -158,6 +167,8 @@ export class AuthService {
     });
 
     if (!challenge) {
+      // Unreachable unless the row was deleted between the two statements;
+      // safeguarded rather than dereferenced.
       // Should be unreachable: updateMany just matched and updated this row,
       // so it exists. Safeguard against a concurrent deletion between the
       // two statements.
@@ -195,11 +206,6 @@ export class AuthService {
         lastLoginAt: new Date(),
       },
     });
-
-    // The challenge was already atomically marked consumed above (the
-    // updateMany with usedAt: null in its where clause) — that's what makes
-    // this endpoint single-use under concurrent requests. No second write
-    // is needed here.
 
     // Create a persisted, revocable session.  Only the hash is stored.
     const { token, sessionId, expiresAt } = await this.sessionService.create({
