@@ -115,6 +115,7 @@ describe("generated OpenAPI document", () => {
     expect(document.paths).toHaveProperty(
       "/api/v1/integrations/auth-context.get",
     );
+    expect(document.paths).toHaveProperty("/api/v1/api-keys/{id}.delete");
     expect(document.paths).toHaveProperty("/api/v1/webhooks.post");
     expect(document.paths).toHaveProperty(
       "/api/v1/webhooks/deliveries/{deliveryId}/replay.post",

@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   Post,
   HttpStatus,
@@ -13,6 +14,7 @@ import {
 } from "@nestjs/common";
 import {
   ApiBearerAuth,
+  ApiExcludeEndpoint,
   ApiParam,
   ApiTags,
   ApiOperation,
@@ -324,17 +326,18 @@ export class ApiKeysController {
    * Revoke an API key: mark as revoked, take effect immediately.
    *
    * Authorization: Organization admin only
-   * Returns: Updated key metadata
+   * Returns: 204 No Content
    * Effect: Revoked key is rejected by auth guard immediately
    */
-  @Delete(":id/revoke")
+  @Delete(":id")
+  @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: "Revoke an API key",
     description:
       "Revoke an API key. The key is immediately rejected by the authentication system.",
   })
   @ApiResponse({
-    status: 200,
+    status: HttpStatus.NO_CONTENT,
     description: "API key revoked successfully",
   })
   @ApiParam({
@@ -359,6 +362,25 @@ export class ApiKeysController {
     @Param("id") keyId: string,
     @Query() query: OrganizationApiKeysQueryDto = {},
   ) {
+    await this.revokeAuthorizedKey(user, keyId, query);
+  }
+
+  @Delete(":id/revoke")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiExcludeEndpoint()
+  async revokeKeyLegacy(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") keyId: string,
+    @Query() query: OrganizationApiKeysQueryDto = {},
+  ) {
+    await this.revokeAuthorizedKey(user, keyId, query);
+  }
+
+  private async revokeAuthorizedKey(
+    user: AuthenticatedUser,
+    keyId: string,
+    query: OrganizationApiKeysQueryDto,
+  ) {
     // Authorization: User must be organization admin
     const organizationId = await this.getAuthorizedOrganizationId(
       user,
@@ -377,7 +399,6 @@ export class ApiKeysController {
         organizationId,
         user.id, // Pass actor for audit logging
       );
-      return { message: "API key revoked successfully" };
     } catch (error) {
       if (error instanceof Error && error.message.includes("Key not found")) {
         throw new ForbiddenException("API key not found");
