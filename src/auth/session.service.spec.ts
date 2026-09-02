@@ -217,6 +217,69 @@ describe("SessionService.validate", () => {
 });
 
 // ---------------------------------------------------------------------------
+// SessionService.tryIdentify
+// ---------------------------------------------------------------------------
+
+describe("SessionService.tryIdentify", () => {
+  it("returns a session identity for a live persisted session", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.findUnique.mockResolvedValue(
+      activeSession({ id: "sess_live", userId: "user_live" }),
+    );
+    const svc = new SessionService(prisma as never, config);
+
+    await expect(svc.tryIdentify(validToken)).resolves.toEqual({
+      sessionId: "sess_live",
+      userId: "user_live",
+    });
+  });
+
+  it("returns null for a malformed token without querying storage", async () => {
+    const prisma = makePrismaMock();
+    const svc = new SessionService(prisma as never, config);
+
+    await expect(svc.tryIdentify("not-a-session")).resolves.toBeNull();
+    expect(prisma.authSession.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("returns null for missing, revoked, or expired sessions", async () => {
+    const prisma = makePrismaMock();
+    const svc = new SessionService(prisma as never, config);
+
+    prisma.authSession.findUnique.mockResolvedValueOnce(null);
+    await expect(svc.tryIdentify(validToken)).resolves.toBeNull();
+
+    prisma.authSession.findUnique.mockResolvedValueOnce(
+      activeSession({ revokedAt: new Date() }),
+    );
+    await expect(svc.tryIdentify(validToken)).resolves.toBeNull();
+
+    prisma.authSession.findUnique.mockResolvedValueOnce(
+      activeSession({ expiresAt: new Date(Date.now() - 1000) }),
+    );
+    await expect(svc.tryIdentify(validToken)).resolves.toBeNull();
+  });
+
+  it("returns null if session storage is temporarily unavailable", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.findUnique.mockRejectedValue(new Error("database down"));
+    const svc = new SessionService(prisma as never, config);
+
+    await expect(svc.tryIdentify(validToken)).resolves.toBeNull();
+  });
+
+  it("does not update lastUsedAt", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.findUnique.mockResolvedValue(activeSession());
+    const svc = new SessionService(prisma as never, config);
+
+    await svc.tryIdentify(validToken);
+
+    expect(prisma.authSession.update).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // SessionService.revoke
 // ---------------------------------------------------------------------------
 

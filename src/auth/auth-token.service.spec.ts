@@ -43,9 +43,14 @@ describe("AuthTokenService", () => {
       join(process.cwd(), "src/auth/auth.service.ts"),
       "utf8",
     );
+    const rateLimitGuardSource = readFileSync(
+      join(process.cwd(), "src/common/guards/rate-limit.guard.ts"),
+      "utf8",
+    );
 
     expect(guardSource).not.toContain("AuthTokenService");
     expect(authServiceSource).not.toContain("AuthTokenService");
+    expect(rateLimitGuardSource).not.toContain("AuthTokenService");
   });
 
   describe("tryVerify", () => {

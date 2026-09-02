@@ -51,14 +51,9 @@ export class AuthTokenService {
   }
 
   /**
-   * Best-effort verify: the decoded payload if `token` is well-formed,
-   * correctly signed, and unexpired — `undefined` otherwise, NEVER throws.
-   *
-   * For callers that only want to know "is this request authenticated"
-   * without enforcing it (e.g. RoleAwareThrottlerGuard, which must run
-   * independently of whether a route also applies AuthGuard, and must never
-   * itself reject a request for having no/a bad token — that's AuthGuard's
-   * job, not the rate limiter's).
+   * Best-effort verification for legacy callers that still need this
+   * deprecated token format. New production code should prefer persisted
+   * sessions through `SessionService`.
    */
   tryVerify(token: string): AuthTokenPayload | undefined {
     try {
