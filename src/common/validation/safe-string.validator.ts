@@ -1,5 +1,22 @@
 import { registerDecorator, ValidationOptions, ValidationArguments } from "class-validator";
 
+function hasDisallowedControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (
+      code <= 0x08 ||
+      code === 0x0b ||
+      code === 0x0c ||
+      (code >= 0x0e && code <= 0x1f) ||
+      code === 0x7f
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Validates that a string doesn't contain dangerous content like script tags,
  * event handlers, or other XSS payloads.
@@ -64,12 +81,13 @@ export function IsSafeString(validationOptions?: ValidationOptions) {
             /<animate\b[^>]*>/i,
             /<set\b[^>]*>/i,
             
-            // Control characters (except whitespace)
-            /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/,
-            
             // Unicode directional override characters
             /[\u202A-\u202E\u2066-\u2069]/,
           ];
+
+          if (hasDisallowedControlCharacter(str)) {
+            return false;
+          }
 
           for (const pattern of dangerousPatterns) {
             if (pattern.test(str)) {
@@ -136,8 +154,7 @@ export function IsSafeDisplayName(validationOptions?: ValidationOptions) {
             return false;
           }
 
-          // Check for control characters (except whitespace)
-          if (/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(str)) {
+          if (hasDisallowedControlCharacter(str)) {
             return false;
           }
 
