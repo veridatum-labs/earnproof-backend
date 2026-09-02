@@ -288,7 +288,7 @@ describe("ApiKeysController - Authorization", () => {
 
       const result = await controller.revokeKey(adminUser, "key_123");
 
-      expect(result.message).toBe("API key revoked successfully");
+      expect(result).toBeUndefined();
       expect(apiKeyService.revokeKey).toHaveBeenCalledWith(
         "key_123",
         organizationId,
@@ -330,9 +330,9 @@ describe("ApiKeysController - Authorization", () => {
       await expect(
         controller.rotateKey(adminUser, "key_1"),
       ).resolves.toBeDefined();
-      await expect(controller.revokeKey(adminUser, "key_1")).resolves.toEqual({
-        message: "API key revoked successfully",
-      });
+      await expect(
+        controller.revokeKey(adminUser, "key_1"),
+      ).resolves.toBeUndefined();
 
       expect(apiKeyService.createKey).toHaveBeenCalledTimes(1);
       expect(apiKeyService.listKeysForOrganization).toHaveBeenCalledTimes(1);
