@@ -188,6 +188,10 @@ export const PURPOSES: Record<string, { purpose: string; paths: string[] }> = {
     purpose: "Node.js standard library type definitions.",
     paths: ["src/", "scripts/"],
   },
+  "@types/supertest": {
+    purpose: "Type definitions for Supertest HTTP assertions in integration specs.",
+    paths: ["test/", "src/**/*.spec.ts"],
+  },
   "@typescript-eslint/eslint-plugin": {
     purpose: "TypeScript-aware lint rules.",
     paths: ["eslint.config.mjs"],
