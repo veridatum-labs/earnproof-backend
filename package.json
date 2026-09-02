@@ -77,6 +77,7 @@
     "typescript-eslint": "^8.67.0"
   },
   "overrides": {
+    "deepmerge-ts": "8.0.2",
     "js-yaml": "5.2.3"
   }
 }
