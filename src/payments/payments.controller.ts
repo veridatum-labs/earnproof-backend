@@ -16,6 +16,7 @@ import {
   ApiResponse,
   ApiTags,
 } from "@nestjs/swagger";
+import { SkipThrottle, Throttle } from "@nestjs/throttler";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { AuthGuard } from "../common/guards/auth.guard";
@@ -56,6 +57,8 @@ export class PaymentsController {
     description: "Stellar Horizon or the database is temporarily unreachable.",
     type: ApiErrorDto,
   })
+  @SkipThrottle({ default: true, verification: true })
+  @Throttle({ strict: {} })
   @Post("sync")
   syncPayments(@CurrentUser() user: AuthenticatedUser): Promise<SyncResultDto> {
     return this.paymentsService.syncPayments(user);
