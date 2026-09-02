@@ -2,19 +2,13 @@ import { Controller, Get, INestApplication } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { Test } from "@nestjs/testing";
 import * as request from "supertest";
-import { Throttle, SkipThrottle } from "@nestjs/throttler";
-import { RateLimitModule } from "./rate-limit.module";
-import { AuthTokenService } from "../../auth/auth-token.service";
+import { SkipThrottle, Throttle } from "@nestjs/throttler";
+import { SessionService } from "../../auth/session.service";
+import { configuration } from "../../config/configuration";
 import { DatabaseModule } from "../../database/database.module";
 import { PrismaService } from "../../database/prisma.service";
-import { configuration } from "../../config/configuration";
+import { RateLimitModule } from "./rate-limit.module";
 
-// A minimal controller standing in for the real proofs/payments/health
-// controllers, exercising the same decorator combinations they use — this
-// proves the wiring in RateLimitModule + RoleAwareThrottlerGuard end-to-end
-// (real ThrottlerStorageService, real HTTP requests) rather than re-testing
-// the guard's internal logic, which is already covered by
-// rate-limit.guard.spec.ts.
 @Controller("test")
 class TestController {
   @Get("default")
@@ -29,10 +23,6 @@ class TestController {
     return { ok: true };
   }
 
-  // Mirrors health.controller.ts's real exemption: bare @SkipThrottle()
-  // defaults to `{ default: true }` ONLY (see @nestjs/throttler's own
-  // SkipThrottle implementation) — every named tier must be listed
-  // explicitly for a route to be fully exempt from all of them.
   @SkipThrottle({ default: true, strict: true, verification: true })
   @Get("health")
   health() {
@@ -40,9 +30,9 @@ class TestController {
   }
 }
 
-describe("Rate limiting (#112) — integration", () => {
+describe("Rate limiting (#112) - integration", () => {
   let app: INestApplication;
-  let authTokenService: AuthTokenService;
+  let sessionService: jest.Mocked<Pick<SessionService, "tryIdentify">>;
 
   beforeAll(async () => {
     process.env.RATE_LIMIT_STRICT_LIMIT = "2";
@@ -52,6 +42,11 @@ describe("Rate limiting (#112) — integration", () => {
     process.env.RATE_LIMIT_AUTHENTICATED_MULTIPLIER = "3";
     process.env.SESSION_SECRET = "test_secret_for_rate_limit_integration";
 
+    const sessionServiceMock: jest.Mocked<Pick<SessionService, "tryIdentify">> =
+      {
+        tryIdentify: jest.fn().mockResolvedValue(null),
+      };
+
     const moduleRef = await Test.createTestingModule({
       imports: [
         ConfigModule.forRoot({ isGlobal: true, load: [configuration] }),
@@ -60,18 +55,20 @@ describe("Rate limiting (#112) — integration", () => {
       ],
       controllers: [TestController],
     })
-      // RateLimitModule imports AuthModule (for AuthTokenService), which also
-      // declares AuthController/AuthService — pulling in PrismaService
-      // transitively via the global DatabaseModule. This test never touches
-      // the database, so a stub avoids requiring a real Postgres connection
-      // just to exercise rate limiting.
       .overrideProvider(PrismaService)
       .useValue({})
+      .overrideProvider(SessionService)
+      .useValue(sessionServiceMock)
       .compile();
 
     app = moduleRef.createNestApplication();
-    authTokenService = moduleRef.get(AuthTokenService);
+    sessionService = moduleRef.get(SessionService);
     await app.init();
+  });
+
+  beforeEach(() => {
+    sessionService.tryIdentify.mockResolvedValue(null);
+    sessionService.tryIdentify.mockClear();
   });
 
   afterAll(async () => {
@@ -95,9 +92,6 @@ describe("Rate limiting (#112) — integration", () => {
   it("rejects with 429 and a Retry-After header once the strict threshold is exceeded", async () => {
     const agent = request.agent(app.getHttpServer());
 
-    // limit is 2 for the strict tier in this test's env config. Non-default
-    // named throttlers get a suffixed header, e.g. "Retry-After-strict" —
-    // see @nestjs/throttler's getThrottlerSuffix in throttler.guard.js.
     await agent.get("/test/strict").expect(200);
     await agent.get("/test/strict").expect(200);
     const blocked = await agent.get("/test/strict").expect(429);
@@ -109,25 +103,20 @@ describe("Rate limiting (#112) — integration", () => {
   it("never rate-limits a route marked @SkipThrottle() regardless of volume", async () => {
     const agent = request.agent(app.getHttpServer());
 
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 10; i += 1) {
       await agent.get("/test/health").expect(200);
     }
   });
 
-  it("gives an authenticated caller a higher effective limit than an anonymous one", async () => {
-    const token = authTokenService.sign({
-      id: "integration-test-user",
-      walletAddress: "G".padEnd(56, "A"),
-      walletHash: "sha256:integration",
-      role: "WORKER",
+  it("gives a live session caller a higher effective limit than an anonymous one", async () => {
+    const token = `${"A".repeat(16)}.${"a".repeat(64)}`;
+    sessionService.tryIdentify.mockResolvedValue({
+      sessionId: "session-rate-limit",
+      userId: "integration-test-user",
     });
 
-    // Anonymous default limit is 3; authenticated multiplier is 3x = 9.
-    // Use a route-distinct agent (separate tracker key: IP is shared, but
-    // the guard tracks authenticated callers by user id) so this is
-    // independent of the anonymous-tier test above.
     const agent = request.agent(app.getHttpServer());
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 5; i += 1) {
       await agent
         .get("/test/default")
         .set("Authorization", `Bearer ${token}`)
