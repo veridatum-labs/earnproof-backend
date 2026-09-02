@@ -1,4 +1,11 @@
-import { BadRequestException, ValidationPipe } from "@nestjs/common";
+import {
+  BadRequestException,
+  INestApplication,
+  ValidationPipe,
+} from "@nestjs/common";
+import { Test } from "@nestjs/testing";
+import { listen, postJson } from "../../test/security/http-client";
+import { configureApp } from "../bootstrap";
 import { CredentialsController } from "./credentials.controller";
 import { CredentialsService, VerifyCredentialResult } from "./credentials.service";
 import { VerifyCredentialDto } from "./dto/verify-credential.dto";
@@ -143,12 +150,9 @@ describe("CredentialsController", () => {
       await expect(
         validationPipe.transform({ credential: nested }, metadata),
       ).rejects.toBeInstanceOf(BadRequestException);
-import { BadRequestException, INestApplication } from "@nestjs/common";
-import { Test } from "@nestjs/testing";
-import { configureApp } from "../bootstrap";
-import { CredentialsController } from "./credentials.controller";
-import { CredentialsService } from "./credentials.service";
-import { listen, postJson } from "../../test/security/http-client";
+    });
+  });
+});
 
 /**
  * HTTP-level tests for CredentialsController (#108).

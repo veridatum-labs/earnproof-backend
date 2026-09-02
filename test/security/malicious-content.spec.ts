@@ -16,14 +16,14 @@ import { CreateOrganizationDto } from "../../src/organizations/dto/create-organi
  */
 
 describe("Security: Malicious content and URL validation", () => {
-  describe("Webhook URL validation", () => {
-    const createValidDto = () => {
-      const dto = new CreateWebhookDto();
-      dto.url = "https://example.com/webhooks/earnproof";
-      dto.events = ["proof.created"];
-      return dto;
-    };
+  const createValidDto = () => {
+    const dto = new CreateWebhookDto();
+    dto.url = "https://example.com/webhooks/earnproof";
+    dto.events = ["proof.created"];
+    return dto;
+  };
 
+  describe("Webhook URL validation", () => {
     it("accepts valid HTTPS URLs", async () => {
       const dto = createValidDto();
       const errors = await validate(dto);

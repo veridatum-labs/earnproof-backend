@@ -1,4 +1,5 @@
 import { Injectable, UnauthorizedException } from "@nestjs/common";
+import type { Prisma } from "@prisma/client";
 import { ConfigService } from "@nestjs/config";
 import { randomBytes } from "crypto";
 import { PrismaService } from "../database/prisma.service";
@@ -155,7 +156,7 @@ export class SessionService {
     const { token, tokenHash, sessionId: newSessionId } = this.generateToken();
     const expiresAt = new Date(this.clock.nowMs() + ttlSeconds * 1000);
 
-    await this.prisma.$transaction(async (transaction) => {
+    await this.prisma.$transaction(async (transaction: Prisma.TransactionClient) => {
       const existing = await transaction.authSession.findUnique({
         where: { id: sessionId },
         select: { userId: true, revokedAt: true, expiresAt: true },
