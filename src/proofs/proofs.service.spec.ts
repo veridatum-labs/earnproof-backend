@@ -190,7 +190,7 @@ describe("ProofsService", () => {
       },
       privacy: { exactIncomeHidden: true, sourceTransactionsHidden: true },
       issuedAt: "2026-08-02T00:00:00.000Z",
-      expiresAt: "2026-09-01T00:00:00.000Z",
+      expiresAt: "2027-09-01T00:00:00.000Z",
     };
     const prisma = {
       proof: {
@@ -204,7 +204,7 @@ describe("ProofsService", () => {
           assetIssuer: null,
           periodStart: new Date("2026-08-01T00:00:00.000Z"),
           periodEnd: new Date("2026-08-31T23:59:59.000Z"),
-          expiresAt: new Date("2026-09-01T00:00:00.000Z"),
+          expiresAt: new Date("2027-09-01T00:00:00.000Z"),
           revokedAt: new Date("2026-08-03T00:00:00.000Z"),
           createdAt: new Date("2026-08-02T00:00:00.000Z"),
           credentialHash: `sha256:${sha256(canonicalize(credential))}`,
@@ -300,7 +300,7 @@ describe("ProofsService", () => {
       },
       privacy: { exactIncomeHidden: true, sourceTransactionsHidden: true },
       issuedAt: "2026-08-02T00:00:00.000Z",
-      expiresAt: "2026-09-01T00:00:00.000Z",
+      expiresAt: "2027-09-01T00:00:00.000Z",
     };
     const prisma = {
       proof: {
@@ -314,7 +314,7 @@ describe("ProofsService", () => {
           assetIssuer: null,
           periodStart: new Date("2026-08-01T00:00:00.000Z"),
           periodEnd: new Date("2026-08-31T23:59:59.000Z"),
-          expiresAt: new Date("2026-09-01T00:00:00.000Z"),
+          expiresAt: new Date("2027-09-01T00:00:00.000Z"),
           revokedAt: null,
           createdAt: new Date("2026-08-02T00:00:00.000Z"),
           credentialHash: `sha256:${sha256(canonicalize(credential))}`,
@@ -462,7 +462,7 @@ describe("ProofsService", () => {
         },
         privacy: { exactIncomeHidden: true, sourceTransactionsHidden: true },
         issuedAt: "2026-08-02T00:00:00.000Z",
-        expiresAt: "2026-09-01T00:00:00.000Z",
+        expiresAt: "2027-09-01T00:00:00.000Z",
         ...credOverrides,
       };
       return {
@@ -477,7 +477,7 @@ describe("ProofsService", () => {
             assetIssuer: null,
             periodStart: new Date("2026-08-01T00:00:00.000Z"),
             periodEnd: new Date("2026-08-31T23:59:59.000Z"),
-            expiresAt: new Date("2026-09-01T00:00:00.000Z"),
+            expiresAt: new Date("2027-09-01T00:00:00.000Z"),
             revokedAt: null,
             createdAt: new Date("2026-08-02T00:00:00.000Z"),
             credentialHash: `sha256:${sha256(canonicalize(credential))}`,

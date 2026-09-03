@@ -12,6 +12,7 @@ import {
   ApiResponse,
   ApiTags,
 } from "@nestjs/swagger";
+import { SkipThrottle } from "@nestjs/throttler";
 import { ApiKeyScope } from "@prisma/client";
 import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { RequireScopes } from "../common/decorators/require-scopes.decorator";
@@ -26,6 +27,7 @@ import { HealthService } from "./health.service";
 import { DependencyStatus } from "./health.types";
 
 @ApiTags("health")
+@SkipThrottle({ default: true, strict: true, verification: true })
 @Controller("health")
 export class HealthController {
   constructor(private readonly health: HealthService) {}

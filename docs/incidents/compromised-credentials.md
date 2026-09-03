@@ -92,7 +92,7 @@ column update, effective immediately for the next request.
 
 Revoking is immediate: `ApiKeyGuard` matches on `status = ACTIVE`.
 
-- **One key** — `DELETE /api/v1/api-keys/:id/revoke`. Writes
+- **One key** — `DELETE /api/v1/api-keys/:id`. Writes
   `api_key.revoked` to the audit trail.
 - **Rotate instead of revoke** only when the integration must keep working and
   you accept that the old secret stops working at the same instant:

@@ -93,7 +93,7 @@ Limits that stay at incident levels become the accidental product behaviour.
 ### 3. Revoke the credential, if the abuse is authenticated
 
 An API key hammering the service is contained by revoking it —
-`DELETE /api/v1/api-keys/:id/revoke` — which takes effect on the next request
+`DELETE /api/v1/api-keys/:id` — which takes effect on the next request
 and is audited. For a session, `SessionService.revokeAll(userId)`.
 
 ### 4. Block upstream

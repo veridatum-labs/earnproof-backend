@@ -1,8 +1,13 @@
-import { registerDecorator, ValidationOptions, ValidationArguments } from "class-validator";
+import {
+  registerDecorator,
+  ValidationArguments,
+  ValidationOptions,
+} from "class-validator";
+import { assertSafeDestinationUrl } from "../http/destination-guard";
 
 /**
  * Validates that a URL is safe and follows security best practices.
- * 
+ *
  * Requirements:
  * - Must use HTTPS protocol
  * - Must have a valid TLD
@@ -24,9 +29,13 @@ export function IsSafeUrl(validationOptions?: ValidationOptions) {
           }
 
           const url = value.trim();
-          
+
           // Reject empty strings
           if (!url) {
+            return false;
+          }
+
+          if (hasControlCharacters(url)) {
             return false;
           }
 
@@ -54,8 +63,10 @@ export function IsSafeUrl(validationOptions?: ValidationOptions) {
           }
 
           try {
+            assertSafeDestinationUrl(url);
+
             const parsed = new URL(url);
-            
+
             // Validate hostname
             const hostname = parsed.hostname;
             if (!hostname || hostname.length > 253) {
@@ -66,10 +77,13 @@ export function IsSafeUrl(validationOptions?: ValidationOptions) {
             if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
               // Allow IP addresses but validate they're not private/local
               const parts = hostname.split(".").map(Number);
-              if (parts.length !== 4 || parts.some(part => part < 0 || part > 255)) {
+              if (
+                parts.length !== 4 ||
+                parts.some((part) => part < 0 || part > 255)
+              ) {
                 return false;
               }
-              
+
               // Reject private/local IP ranges
               if (
                 parts[0] === 10 ||
@@ -86,7 +100,7 @@ export function IsSafeUrl(validationOptions?: ValidationOptions) {
               if (hostname !== "localhost" && !hostname.includes(".")) {
                 return false;
               }
-              
+
               // Each label must be 1-63 chars, alphanumeric or hyphen (not start/end with hyphen)
               const labels = hostname.split(".");
               for (const label of labels) {
@@ -115,6 +129,7 @@ export function IsSafeUrl(validationOptions?: ValidationOptions) {
             // Check for suspicious patterns in path/query
             const suspiciousPatterns = [
               /<script/i,
+              /<\/script/i,
               /javascript:/i,
               /on\w+\s*=/i, // onclick=, onload=, etc.
               /expression\s*\(/i,
@@ -123,8 +138,12 @@ export function IsSafeUrl(validationOptions?: ValidationOptions) {
             ];
 
             const fullPath = parsed.pathname + parsed.search;
+            const decodedPath = decodeRepeatedly(fullPath);
+            if (hasControlCharacters(decodedPath)) {
+              return false;
+            }
             for (const pattern of suspiciousPatterns) {
-              if (pattern.test(fullPath)) {
+              if (pattern.test(fullPath) || pattern.test(decodedPath)) {
                 return false;
               }
             }
@@ -146,4 +165,28 @@ export function IsSafeUrl(validationOptions?: ValidationOptions) {
       },
     });
   };
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function decodeRepeatedly(value: string): string {
+  let decoded = value;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) return decoded;
+      decoded = next;
+    } catch {
+      return decoded;
+    }
+  }
+  return decoded;
 }

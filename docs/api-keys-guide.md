@@ -25,7 +25,7 @@ a key is required, and a key cannot be used to manage keys.
 | Use | any scoped endpoint | The key | |
 | List | `GET /api/v1/api-keys` | Session token, organization admin | Metadata only, never secrets |
 | Rotate | `POST /api/v1/api-keys/{id}/rotate` | Session token, organization admin | New secret; old one dies immediately |
-| Revoke | `DELETE /api/v1/api-keys/{id}/revoke` | Session token, organization admin | Key rejected from the next request onward |
+| Revoke | `DELETE /api/v1/api-keys/{id}` | Session token, organization admin | Key rejected from the next request onward |
 
 Full request and response schemas are in the OpenAPI document the API serves at
 [`/docs`](http://localhost:4000/docs) (`/docs` on any deployment). This guide
@@ -202,7 +202,7 @@ a laptop you no longer control.
 ## Revoking a key
 
 ```bash
-curl -X DELETE https://api.example.com/api/v1/api-keys/$KEY_ID/revoke \
+curl -X DELETE https://api.example.com/api/v1/api-keys/$KEY_ID \
   -H "Authorization: Bearer $SESSION_TOKEN"
 ```
 
