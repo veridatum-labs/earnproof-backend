@@ -16,6 +16,7 @@ import {
   ApiResponse,
   ApiTags,
 } from "@nestjs/swagger";
+import { SkipThrottle, Throttle } from "@nestjs/throttler";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { ApiErrorDto } from "../common/dto/api-error.dto";
@@ -169,6 +170,12 @@ export class ProofsController {
     type: ApiErrorDto,
   })
   @UseGuards(AuthGuard)
+  // Proof creation is expensive (Stellar reads, contract anchoring) — the
+  // "strict" tier, not "default". SkipThrottle excludes the OTHER named
+  // throttlers so this route is judged against exactly one budget, not all
+  // three simultaneously (see rate-limit.module.ts's doc comment).
+  @SkipThrottle({ default: true, verification: true })
+  @Throttle({ strict: {} })
   @Post("minimum-income")
   createMinimumIncomeProof(
     @CurrentUser() user: AuthenticatedUser,
@@ -264,6 +271,8 @@ export class ProofsController {
     description: "Verification result and the signed credential.",
     type: VerifyProofResponseDto,
   })
+  @SkipThrottle({ default: true, strict: true })
+  @Throttle({ verification: {} })
   @Get(":id/verify")
   verifyProof(@Param("id") id: string) {
     return this.proofsService.verifyProof(id);

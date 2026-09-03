@@ -1,4 +1,5 @@
 import { Injectable, UnauthorizedException } from "@nestjs/common";
+import type { Prisma } from "@prisma/client";
 import { ConfigService } from "@nestjs/config";
 import { randomBytes } from "crypto";
 import { PrismaService } from "../database/prisma.service";
@@ -8,6 +9,18 @@ import { Clock, SystemClock } from "../common/time/clock";
 
 /** Default session TTL: 12 hours in seconds. */
 const DEFAULT_TTL_SECONDS = 60 * 60 * 12;
+
+type SessionLookup = {
+  id: string;
+  userId: string;
+  expiresAt: Date;
+  revokedAt: Date | null;
+};
+
+export type SessionIdentity = {
+  sessionId: string;
+  userId: string;
+};
 
 /**
  * How the opaque token is structured (internal only).
@@ -85,15 +98,7 @@ export class SessionService {
       throw new UnauthorizedException("Malformed session token");
     }
 
-    const session = await this.prisma.authSession.findUnique({
-      where: { tokenHash },
-      select: {
-        id: true,
-        userId: true,
-        expiresAt: true,
-        revokedAt: true,
-      },
-    });
+    const session = await this.findSessionByHash(tokenHash);
 
     if (!session) {
       throw new UnauthorizedException("Session not found");
@@ -119,6 +124,26 @@ export class SessionService {
       });
 
     return { sessionId: session.id, userId: session.userId };
+  }
+
+  /**
+   * Resolve a live persisted session without mutating `lastUsedAt` or throwing.
+   * This is for soft-auth consumers such as global rate limiting; route guards
+   * still own authentication enforcement.
+   */
+  async tryIdentify(token: string): Promise<SessionIdentity | null> {
+    const tokenHash = this.hashToken(token);
+    if (!tokenHash) return null;
+
+    try {
+      const session = await this.findSessionByHash(tokenHash);
+      if (!session) return null;
+      if (session.revokedAt !== null) return null;
+      if (session.expiresAt <= this.clock.now()) return null;
+      return { sessionId: session.id, userId: session.userId };
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -155,7 +180,7 @@ export class SessionService {
     const { token, tokenHash, sessionId: newSessionId } = this.generateToken();
     const expiresAt = new Date(this.clock.nowMs() + ttlSeconds * 1000);
 
-    await this.prisma.$transaction(async (transaction) => {
+    await this.prisma.$transaction(async (transaction: Prisma.TransactionClient) => {
       const existing = await transaction.authSession.findUnique({
         where: { id: sessionId },
         select: { userId: true, revokedAt: true, expiresAt: true },
@@ -263,5 +288,17 @@ export class SessionService {
       return null;
     }
     return sha256(token);
+  }
+
+  private findSessionByHash(tokenHash: string): Promise<SessionLookup | null> {
+    return this.prisma.authSession.findUnique({
+      where: { tokenHash },
+      select: {
+        id: true,
+        userId: true,
+        expiresAt: true,
+        revokedAt: true,
+      },
+    });
   }
 }

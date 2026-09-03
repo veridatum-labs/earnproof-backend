@@ -397,6 +397,45 @@ const envSchema = z.object({
 
   /** Allow synthetic seed data (demo seed) in non-production environments */
   ALLOW_SYNTHETIC_SEED: optionalString(z.enum(["true", "false"])),
+
+  // ──────────────────────────────────────────────────────────────────────
+  // GLOBAL API RATE LIMITING
+  // ──────────────────────────────────────────────────────────────────────
+
+  /** Default global request window in milliseconds */
+  RATE_LIMIT_DEFAULT_TTL_MS: timeWindowMs("RATE_LIMIT_DEFAULT_TTL_MS")
+    .default(60000),
+
+  /** Default global request count */
+  RATE_LIMIT_DEFAULT_LIMIT: rateLimitCounter("RATE_LIMIT_DEFAULT_LIMIT")
+    .default(100),
+
+  /** Strict request window for expensive operations in milliseconds */
+  RATE_LIMIT_STRICT_TTL_MS: timeWindowMs("RATE_LIMIT_STRICT_TTL_MS")
+    .default(60000),
+
+  /** Strict request count for expensive operations */
+  RATE_LIMIT_STRICT_LIMIT: rateLimitCounter("RATE_LIMIT_STRICT_LIMIT")
+    .default(10),
+
+  /** Public verification request window in milliseconds */
+  RATE_LIMIT_VERIFICATION_TTL_MS: timeWindowMs(
+    "RATE_LIMIT_VERIFICATION_TTL_MS",
+  )
+    .default(60000),
+
+  /** Public verification request count */
+  RATE_LIMIT_VERIFICATION_LIMIT: rateLimitCounter(
+    "RATE_LIMIT_VERIFICATION_LIMIT",
+  )
+    .default(30),
+
+  /** Multiplier applied to authenticated caller request limits */
+  RATE_LIMIT_AUTHENTICATED_MULTIPLIER: z
+    .coerce.number()
+    .positive("RATE_LIMIT_AUTHENTICATED_MULTIPLIER must be positive")
+    .finite("RATE_LIMIT_AUTHENTICATED_MULTIPLIER must be finite")
+    .default(3),
 });
 
 /**

@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   Post,
   HttpStatus,
@@ -13,6 +14,7 @@ import {
 } from "@nestjs/common";
 import {
   ApiBearerAuth,
+  ApiExcludeEndpoint,
   ApiParam,
   ApiTags,
   ApiOperation,
@@ -37,9 +39,8 @@ import {
  * Access control:
  * - All endpoints require wallet authentication (AuthGuard) + organization admin role
  * - Organization isolation enforced at query level (cannot manage other orgs' keys)
- * - Role check must be implemented per organization membership/admin status
- *   (this codebase doesn't yet have explicit org-role modeling, so we check
- *    organization membership implicitly via user context when available)
+ * - Organization admin currently means global ADMIN or organization creator.
+ *   Multi-admin memberships require a future OrganizationMember model.
  *
  * Response behavior:
  * - Creation: returns raw secret EXACTLY ONCE (never retrievable again)
@@ -325,17 +326,18 @@ export class ApiKeysController {
    * Revoke an API key: mark as revoked, take effect immediately.
    *
    * Authorization: Organization admin only
-   * Returns: Updated key metadata
+   * Returns: 204 No Content
    * Effect: Revoked key is rejected by auth guard immediately
    */
-  @Delete(":id/revoke")
+  @Delete(":id")
+  @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: "Revoke an API key",
     description:
       "Revoke an API key. The key is immediately rejected by the authentication system.",
   })
   @ApiResponse({
-    status: 200,
+    status: HttpStatus.NO_CONTENT,
     description: "API key revoked successfully",
   })
   @ApiParam({
@@ -360,6 +362,25 @@ export class ApiKeysController {
     @Param("id") keyId: string,
     @Query() query: OrganizationApiKeysQueryDto = {},
   ) {
+    await this.revokeAuthorizedKey(user, keyId, query);
+  }
+
+  @Delete(":id/revoke")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiExcludeEndpoint()
+  async revokeKeyLegacy(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") keyId: string,
+    @Query() query: OrganizationApiKeysQueryDto = {},
+  ) {
+    await this.revokeAuthorizedKey(user, keyId, query);
+  }
+
+  private async revokeAuthorizedKey(
+    user: AuthenticatedUser,
+    keyId: string,
+    query: OrganizationApiKeysQueryDto,
+  ) {
     // Authorization: User must be organization admin
     const organizationId = await this.getAuthorizedOrganizationId(
       user,
@@ -378,7 +399,6 @@ export class ApiKeysController {
         organizationId,
         user.id, // Pass actor for audit logging
       );
-      return { message: "API key revoked successfully" };
     } catch (error) {
       if (error instanceof Error && error.message.includes("Key not found")) {
         throw new ForbiddenException("API key not found");
@@ -398,14 +418,12 @@ export class ApiKeysController {
   /**
    * Helper: Get user's primary organization ID and verify admin access.
    *
-   * Returns the organization ID if the user is an admin of at least one organization.
+   * Returns the organization ID if the user is an admin of the requested
+   * organization. If no organization was requested, it only infers one when
+   * exactly one manageable organization exists.
    * In this codebase, organization admin is determined by:
    * - User created the organization (createdById == userId), OR
    * - User has ADMIN role (global admin has access to all orgs)
-   *
-   * TODO: This implementation assumes user can only manage orgs they created.
-   * For multi-admin orgs, implement explicit OrganizationMember join table
-   * with role field (admin, member, etc.)
    *
    * @returns organizationId if authorized as admin, null otherwise
    */
@@ -413,16 +431,39 @@ export class ApiKeysController {
     user: AuthenticatedUser,
     requestedOrganizationId?: string,
   ): Promise<string | null> {
-    const org = await this.prisma.organization.findFirst({
-      where: {
-        ...(requestedOrganizationId ? { id: requestedOrganizationId } : {}),
-        ...(user.role === "ADMIN" ? {} : { createdById: user.id }),
-      },
+    const accessWhere =
+      user.role === "ADMIN" ? {} : { createdById: user.id };
+
+    if (requestedOrganizationId) {
+      const org = await this.prisma.organization.findFirst({
+        where: {
+          id: requestedOrganizationId,
+          ...accessWhere,
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      return org?.id || null;
+    }
+
+    const organizations = await this.prisma.organization.findMany({
+      where: accessWhere,
       select: {
         id: true,
       },
+      orderBy: {
+        createdAt: "asc",
+      },
+      take: 2,
     });
 
-    return org?.id || null;
+    if (organizations.length === 0) return null;
+    if (organizations.length === 1) return organizations[0]?.id ?? null;
+
+    throw new BadRequestException(
+      "organizationId is required when you can manage more than one organization",
+    );
   }
 }
