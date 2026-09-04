@@ -60,14 +60,7 @@ export class OrganizationsService {
     organizationId: string,
     input: UpdateOrganizationDto,
   ): Promise<OrganizationResponseDto> {
-    const org = await this.getOrganizationById(organizationId);
-
-    // Check ownership: only creator or admin can update
-    if (user.role !== "ADMIN" && org.createdById !== user.id) {
-      throw new ForbiddenException(
-        "You do not have permission to update this organization",
-      );
-    }
+    await this.getVisibleOrganization(user, organizationId);
 
     const updated = await this.prisma.organization.update({
       where: { id: organizationId },
@@ -89,12 +82,7 @@ export class OrganizationsService {
     user: AuthenticatedUser,
     organizationId: string,
   ): Promise<OrganizationResponseDto> {
-    const org = await this.getOrganizationById(organizationId);
-    if (user.role !== "ADMIN" && org.createdById !== user.id) {
-      throw new ForbiddenException(
-        "You do not have permission to access this organization",
-      );
-    }
+    const org = await this.getVisibleOrganization(user, organizationId);
     const issuerCount = await this.prisma.issuer.count({
       where: { organizationId },
     });
@@ -169,6 +157,25 @@ export class OrganizationsService {
       );
     }
 
+    return org;
+  }
+
+  /**
+   * Fetch ownership and existence in one scoped query. A non-admin receives
+   * the same 404 for another tenant and for an absent/deleted resource, so a
+   * denied request cannot become an existence oracle.
+   */
+  private async getVisibleOrganization(
+    user: AuthenticatedUser,
+    organizationId: string,
+  ) {
+    const org = await this.prisma.organization.findFirst({
+      where: user.role === "ADMIN" ? { id: organizationId } : {
+        id: organizationId,
+        createdById: user.id,
+      },
+    });
+    if (!org) throw new NotFoundException("Organization not found");
     return org;
   }
 
