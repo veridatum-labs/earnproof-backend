@@ -7,6 +7,7 @@ import { ConfigService } from "@nestjs/config";
 import { Interval } from "@nestjs/schedule";
 import { AnchoringOperation, AnchoringStatus } from "@prisma/client";
 import { PrismaService } from "../database/prisma.service";
+import { redactError } from "../common/observability/redaction";
 import {
   AnchorProofInput,
   ContractAnchoringService,
@@ -67,13 +68,6 @@ const PERMANENT_ERROR_PATTERNS: RegExp[] = [
  * Strip potential secrets from an error message before storing.
  * Removes Stellar secret-key-like tokens (S…56 chars) and KEY=VALUE pairs.
  */
-function sanitiseError(message: string): string {
-  return message
-    .replace(/S[A-Z2-7]{55}/g, "[REDACTED_SECRET]")
-    .replace(/\b[A-Z_]{3,}=[^\s]+/g, "[REDACTED_ENV]")
-    .slice(0, 500); // cap length to avoid unbounded storage
-}
-
 function isPermanentError(message: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }
@@ -429,7 +423,7 @@ export class AnchoringWorkerService implements OnApplicationShutdown {
         isPermanentError(message) ||
         newAttemptCount >= MAX_ATTEMPTS;
 
-      const safeError = sanitiseError(message);
+      const safeError = redactError(err);
 
       if (permanent) {
         await this.prisma.anchoringIntent.update({

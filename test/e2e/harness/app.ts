@@ -8,6 +8,9 @@ import { validateEnv } from "../../../src/config/env.validation";
 import { DatabaseModule } from "../../../src/database/database.module";
 import { ProofsModule } from "../../../src/proofs/proofs.module";
 import { WebhooksModule } from "../../../src/webhooks/webhooks.module";
+import { OrganizationsModule } from "../../../src/organizations/organizations.module";
+import { ApiKeysModule } from "../../../src/api-keys/api-keys.module";
+import { HealthModule } from "../../../src/health/health.module";
 import { configureApp } from "../../../src/bootstrap";
 import { withDeadline } from "../../integration/harness/bounded";
 import { integrationConfig } from "../../integration/harness/config";
@@ -39,6 +42,9 @@ import { integrationConfig } from "../../integration/harness/config";
     AuthModule,
     WebhooksModule,
     ProofsModule,
+    OrganizationsModule,
+    ApiKeysModule,
+    HealthModule,
   ],
 })
 class E2eAppModule {}
