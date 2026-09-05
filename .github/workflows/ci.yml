@@ -25,6 +25,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run prisma:generate
+      - run: npm run migration:safety
       - run: npm run lint
       - run: npm test -- --runInBand
       # Replays every frozen signing vector through the reference verifier and
