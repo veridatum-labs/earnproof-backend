@@ -261,6 +261,24 @@ describe("ContractAnchoringService", () => {
       expect(loggedMessage).not.toContain("GISSUER");
     });
 
+    it("redacts signing material embedded by Node in a failed command's argv", async () => {
+      const service = buildService();
+      const secret = `S${"A".repeat(55)}`;
+      const loggerWarnSpy = jest.spyOn(
+        (service as unknown as { logger: { warn: jest.Mock } }).logger,
+        "warn",
+      );
+      mockExecFileOnce({
+        error: new Error(`Command failed: stellar contract invoke --source ${secret} RPC_TOKEN=synthetic`),
+      });
+
+      const result = await service.anchorProof(proofInput);
+      expect(result).toEqual(expect.objectContaining({ anchored: false, reason: "failed" }));
+      expect(result.anchored ? "" : result.error).not.toContain(secret);
+      expect(loggerWarnSpy.mock.calls[0][0]).not.toContain(secret);
+      expect(loggerWarnSpy.mock.calls[0][0]).toContain("[REDACTED_SECRET]");
+    });
+
     it("falls back to a generic message when the thrown value isn't an Error", async () => {
       const service = buildService();
       mockExecFile.mockImplementationOnce(
