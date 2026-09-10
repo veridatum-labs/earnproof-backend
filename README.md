@@ -178,6 +178,10 @@ and its default, how to run the image against the Compose services, how to apply
 migrations from the same artefact, which probe an orchestrator should use, and
 the security properties of the image.
 
+Hosted Node services that start with `npm run start` apply pending Prisma
+migrations through the npm `prestart` lifecycle before accepting traffic.
+Container deployments continue to use a separate pre-deploy migration job.
+
 Note that `docker compose up -d` starts PostgreSQL and Redis for local
 development only. It does not build or run the API.
 

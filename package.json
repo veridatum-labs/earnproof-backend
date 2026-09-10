@@ -11,6 +11,7 @@
   "scripts": {
     "build": "prisma generate && nest build",
     "postbuild": "node --check dist/main.js",
+    "prestart": "npm run prisma:migrate:deploy",
     "start": "node dist/main.js",
     "start:nest": "nest start",
     "start:dev": "nest start --watch",
@@ -24,6 +25,7 @@
     "test:e2e:serial": "jest --config jest.e2e.config.js --runInBand",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "seed:demo": "ts-node prisma/seed-demo.ts",
     "db:reset": "ts-node prisma/reset.ts",
