@@ -9,6 +9,8 @@
     "npm": ">=10.0.0"
   },
   "scripts": {
+    "prepare": "npm run hooks:install",
+    "hooks:install": "node scripts/install-git-hooks.js",
     "build": "prisma generate && nest build",
     "postbuild": "node --check dist/main.js",
     "prestart": "npm run prisma:migrate:deploy",
