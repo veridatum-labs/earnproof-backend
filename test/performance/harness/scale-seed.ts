@@ -153,7 +153,7 @@ export async function seedScaleFixture(
   prisma: PrismaClient,
   scale: ScaleFactors = DEFAULT_SCALE,
 ): Promise<ScaleFixture> {
-  const key = encryptionKey();
+  const key = new Map([[0, encryptionKey()]]);
 
   // ---------------------------------------------------------------------
   // Organizations (tenants) and the admin users that create them.
@@ -246,7 +246,7 @@ export async function seedScaleFixture(
         destinationAddress: syntheticWalletAddress(`dst-${seed}`),
         assetCode: i % 5 === 0 ? "XLM" : "USDC",
         assetIssuer: syntheticWalletAddress(`asset-${seed}`),
-        amountEncrypted: encryptProtectedAmount(syntheticAmount(seed), key),
+        amountEncrypted: encryptProtectedAmount(syntheticAmount(seed), key, 0),
         // Spread over ~2 years so ORDER BY occurredAt DESC has real variety.
         occurredAt: syntheticDate(-(i % 730)),
         classification: i % 4 === 0 ? "INCOME" : "UNKNOWN",
@@ -367,6 +367,7 @@ export async function seedScaleFixture(
       secretEncrypted: encryptProtectedAmount(
         `synthetic-perf-secret-${index}`,
         key,
+        0,
       ),
       events: ["proof.created", "proof.revoked"] as unknown as Prisma.InputJsonValue,
     }),

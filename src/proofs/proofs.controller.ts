@@ -21,6 +21,7 @@ import { AuthenticatedUser } from "../auth/auth.types";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { AuthGuard } from "../common/guards/auth.guard";
+import { CreateAggregateEarningsProofDto } from "./dto/create-aggregate-earnings-proof.dto";
 import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.dto";
 import { CreatePaymentReceiptProofDto } from "./dto/create-payment-receipt-proof.dto";
 import { CreateRecurringIncomeProofDto } from "./dto/create-recurring-income-proof.dto";
@@ -213,6 +214,45 @@ export class ProofsController {
     @Body() body: CreateRecurringIncomeProofDto,
   ) {
     return this.proofsService.createRecurringIncomeProof(user, body);
+  }
+
+  @ApiOperation({
+    summary: "Create an aggregate-earnings proof",
+    description:
+      "Issues a privacy-preserving credential committing the total eligible income received " +
+      "over a bounded period for a single asset. Individual component payments and source " +
+      "addresses are never disclosed; only the normalized aggregate total, payment and " +
+      "source counts, and the aggregation policy version are committed. Mixed-asset " +
+      "selections are rejected unless an explicit conversion policy is configured.",
+  })
+  @ApiBearerAuth()
+  @ApiResponse({
+    status: HttpStatus.CREATED,
+    description: "Aggregate-earnings proof created.",
+    type: ProofCreatedDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.BAD_REQUEST,
+    description:
+      "The period is invalid or too long, a selected payment is ineligible, outside the " +
+      "period, on a different asset, spans too many sources, or requests an unsupported " +
+      "conversion policy.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @UseGuards(AuthGuard)
+  @SkipThrottle({ default: true, verification: true })
+  @Throttle({ strict: {} })
+  @Post("aggregate-earnings")
+  createAggregateEarningsProof(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: CreateAggregateEarningsProofDto,
+  ) {
+    return this.proofsService.createAggregateEarningsProof(user, body);
   }
 
   @ApiOperation({

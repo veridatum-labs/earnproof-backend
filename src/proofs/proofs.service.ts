@@ -28,7 +28,14 @@ import { PaymentEncryptionKeyringService } from "../common/crypto/payment-encryp
 import { ApiErrorCode } from "../common/dto/api-error.dto";
 import { PrismaService } from "../database/prisma.service";
 import { WebhookDeliveryService } from "../webhooks/webhook-delivery.service";
+import {
+  AGGREGATE_EARNINGS_POLICY_VERSION,
+  AGGREGATE_EARNINGS_SCHEMA_VERSION,
+  AggregateEarningsPolicyError,
+  aggregateEligibleEarnings,
+} from "./aggregate-earnings.policy";
 import { ContractAnchoringService } from "./contract-anchoring.service";
+import { CreateAggregateEarningsProofDto } from "./dto/create-aggregate-earnings-proof.dto";
 import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.dto";
 import { CreatePaymentReceiptProofDto } from "./dto/create-payment-receipt-proof.dto";
 import {
@@ -110,10 +117,36 @@ type RecurringIncomeCredential = {
   expiresAt: string;
 };
 
+type AggregateEarningsCredential = {
+  id: string;
+  type: "EarnProofAggregateEarningsCredential";
+  schemaVersion: "earnproof.aggregate-earnings.v1";
+  issuer: "earnproof-backend";
+  subject: { walletHash: string };
+  claim: {
+    operator: "sum";
+    totalAmount: string;
+    assetCode: string;
+    assetIssuer: string | null;
+    periodStart: string;
+    periodEnd: string;
+    qualifyingPaymentCount: number;
+    sourceCount: number;
+    aggregationPolicyVersion: string;
+  };
+  privacy: {
+    componentPaymentsHidden: true;
+    sourceMetadataHidden: true;
+  };
+  issuedAt: string;
+  expiresAt: string;
+};
+
 type EarnProofCredential =
   | MinimumIncomeCredential
   | PaymentReceiptCredential
-  | RecurringIncomeCredential;
+  | RecurringIncomeCredential
+  | AggregateEarningsCredential;
 
 @Injectable()
 export class ProofsService {
@@ -690,6 +723,162 @@ export class ProofsService {
     };
   }
 
+  async createAggregateEarningsProof(
+    user: AuthenticatedUser,
+    input: CreateAggregateEarningsProofDto,
+  ) {
+    const periodStart = new Date(input.periodStart);
+    const periodEnd = new Date(input.periodEnd);
+    const assetIssuer = input.assetIssuer ?? null;
+
+    // Deterministic, de-duplicated lookup order so the same request always
+    // issues the same credential regardless of how the caller ordered ids or
+    // how PostgreSQL returned the rows.
+    const selectedPaymentIds = [...new Set(input.selectedPaymentIds)].sort();
+    const payments = await this.prisma.payment.findMany({
+      where: { id: { in: selectedPaymentIds }, userId: user.id },
+      select: {
+        id: true,
+        operationId: true,
+        sourceAddress: true,
+        assetCode: true,
+        assetIssuer: true,
+        amountEncrypted: true,
+        classification: true,
+        isEligible: true,
+        occurredAt: true,
+      },
+    });
+
+    if (payments.length !== selectedPaymentIds.length) {
+      throw new BadRequestException(
+        "One or more selected payments are invalid",
+      );
+    }
+
+    const components = payments.map((payment) => ({
+      paymentId: payment.id,
+      operationId: payment.operationId,
+      sourceAddress: payment.sourceAddress,
+      assetCode: payment.assetCode,
+      assetIssuer: payment.assetIssuer,
+      amount: this.revealAmountDecimal(payment.amountEncrypted),
+      classification: payment.classification,
+      isEligible: payment.isEligible,
+      occurredAt: payment.occurredAt,
+    }));
+
+    let aggregation;
+    try {
+      aggregation = aggregateEligibleEarnings(components, {
+        periodStart,
+        periodEnd,
+        assetCode: input.assetCode,
+        assetIssuer,
+        conversionPolicy: input.conversionPolicy,
+      });
+    } catch (error) {
+      if (error instanceof AggregateEarningsPolicyError) {
+        throw new BadRequestException(error.message);
+      }
+      throw error;
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(
+      now.getTime() +
+        (input.expiresInDays ?? DEFAULT_EXPIRY_DAYS) * 24 * 60 * 60 * 1000,
+    );
+    const proofId = randomUUID();
+    const credentialInput = {
+      id: proofId,
+      walletHash: user.walletHash,
+      totalAmount: aggregation.totalAmount,
+      assetCode: input.assetCode,
+      assetIssuer,
+      periodStart,
+      periodEnd,
+      qualifyingPaymentCount: aggregation.qualifyingPaymentCount,
+      sourceCount: aggregation.sourceCount,
+      issuedAt: now,
+      expiresAt,
+    };
+    const draftCredential = this.buildAggregateEarningsCredential(
+      credentialInput,
+    );
+    const credentialHash = `sha256:${sha256(canonicalize(draftCredential))}`;
+    const commitment = `sha256:${sha256(credentialHash)}`;
+
+    const proof = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.proof.create({
+        data: {
+          id: proofId,
+          userId: user.id,
+          proofType: ProofType.AGGREGATE_EARNINGS,
+          schemaVersion: AGGREGATE_EARNINGS_SCHEMA_VERSION,
+          status: ProofStatus.ACTIVE,
+          network: this.stellarNetwork,
+          assetCode: input.assetCode,
+          assetIssuer,
+          periodStart,
+          periodEnd,
+          expiresAt,
+          createdAt: now,
+          credentialHash,
+          commitment,
+          claim: {
+            create: {
+              operator: "sum",
+              // The committed aggregate total. It is the proof's assertion, so
+              // it is reconstructible at verification time; the individual
+              // component payments and source addresses are never stored.
+              thresholdEncrypted: this.protectAmount(aggregation.totalAmount),
+              result: true,
+              disclosurePolicy: {
+                componentPaymentsHidden: true,
+                sourceMetadataHidden: true,
+                qualifyingPaymentCount: aggregation.qualifyingPaymentCount,
+                sourceCount: aggregation.sourceCount,
+                aggregationPolicyVersion: AGGREGATE_EARNINGS_POLICY_VERSION,
+              },
+            },
+          },
+        },
+        include: { claim: true },
+      });
+
+      if (this.anchoringEnabled) {
+        await tx.anchoringIntent.create({
+          data: {
+            proofId: created.id,
+            operation: AnchoringOperation.REGISTER,
+            status: AnchoringStatus.PENDING,
+          },
+        });
+      }
+
+      return created;
+    });
+
+    const credential = this.buildAggregateEarningsCredential({
+      ...credentialInput,
+      id: proof.id,
+      issuedAt: proof.createdAt,
+      expiresAt: proof.expiresAt,
+    });
+
+    this.emitProofCreated(user.id, proof);
+    return {
+      proofId: proof.id,
+      status: proof.status,
+      verificationUrl: `/api/v1/proofs/${proof.id}/verify`,
+      credential: this.signCredential(credential),
+      anchoring: this.anchoringEnabled
+        ? { anchored: false as const, reason: "pending" as const }
+        : { anchored: false as const, reason: "disabled" as const },
+    };
+  }
+
   async revokeProof(userId: string, proofId: string) {
     const proof = await this.prisma.proof.findUnique({
       where: {
@@ -819,20 +1008,25 @@ export class ProofsService {
               ...proof,
               claim: proof.claim!,
             })
-          : this.buildCredential({
-            id: proof.id,
-            walletHash: proof.user.walletHash,
-            thresholdAmount: this.revealThreshold(
-              proof.claim.thresholdEncrypted,
-            ),
-            assetCode: proof.assetCode,
-            assetIssuer: proof.assetIssuer,
-            periodStart: proof.periodStart ?? proof.createdAt,
-            periodEnd: proof.periodEnd ?? proof.createdAt,
-            qualifyingPaymentCount: this.qualifyingPaymentCount(proof.claim),
-            issuedAt: proof.createdAt,
-            expiresAt: proof.expiresAt,
-          });
+          : proof.proofType === ProofType.AGGREGATE_EARNINGS
+            ? this.rebuildAggregateEarningsCredential({
+                ...proof,
+                claim: proof.claim!,
+              })
+            : this.buildCredential({
+              id: proof.id,
+              walletHash: proof.user.walletHash,
+              thresholdAmount: this.revealThreshold(
+                proof.claim.thresholdEncrypted,
+              ),
+              assetCode: proof.assetCode,
+              assetIssuer: proof.assetIssuer,
+              periodStart: proof.periodStart ?? proof.createdAt,
+              periodEnd: proof.periodEnd ?? proof.createdAt,
+              qualifyingPaymentCount: this.qualifyingPaymentCount(proof.claim),
+              issuedAt: proof.createdAt,
+              expiresAt: proof.expiresAt,
+            });
     const signedCredential = this.signCredential(credential);
     const expectedHash = `sha256:${sha256(canonicalize(credential))}`;
 
@@ -1082,6 +1276,45 @@ export class ProofsService {
     };
   }
 
+  private buildAggregateEarningsCredential(input: {
+    id: string;
+    walletHash: string;
+    totalAmount: string;
+    assetCode: string;
+    assetIssuer: string | null;
+    periodStart: Date;
+    periodEnd: Date;
+    qualifyingPaymentCount: number;
+    sourceCount: number;
+    issuedAt: Date;
+    expiresAt: Date;
+  }): AggregateEarningsCredential {
+    return {
+      id: input.id,
+      type: "EarnProofAggregateEarningsCredential",
+      schemaVersion: AGGREGATE_EARNINGS_SCHEMA_VERSION,
+      issuer: "earnproof-backend",
+      subject: { walletHash: input.walletHash },
+      claim: {
+        operator: "sum",
+        totalAmount: input.totalAmount,
+        assetCode: input.assetCode,
+        assetIssuer: input.assetIssuer,
+        periodStart: input.periodStart.toISOString(),
+        periodEnd: input.periodEnd.toISOString(),
+        qualifyingPaymentCount: input.qualifyingPaymentCount,
+        sourceCount: input.sourceCount,
+        aggregationPolicyVersion: AGGREGATE_EARNINGS_POLICY_VERSION,
+      },
+      privacy: {
+        componentPaymentsHidden: true,
+        sourceMetadataHidden: true,
+      },
+      issuedAt: input.issuedAt.toISOString(),
+      expiresAt: input.expiresAt.toISOString(),
+    };
+  }
+
   private buildRecurringIntervals(
     periodStart: Date,
     periodEnd: Date,
@@ -1183,6 +1416,41 @@ export class ProofsService {
     });
   }
 
+  private rebuildAggregateEarningsCredential(proof: {
+    id: string;
+    assetCode: string;
+    assetIssuer: string | null;
+    createdAt: Date;
+    expiresAt: Date;
+    periodStart: Date | null;
+    periodEnd: Date | null;
+    user: { walletHash: string };
+    claim: {
+      thresholdEncrypted: string | null;
+      disclosurePolicy: Prisma.JsonValue;
+    };
+  }) {
+    const policy = this.jsonPolicy(proof.claim.disclosurePolicy);
+
+    return this.buildAggregateEarningsCredential({
+      id: proof.id,
+      walletHash: proof.user.walletHash,
+      totalAmount: this.revealThreshold(proof.claim.thresholdEncrypted),
+      assetCode: proof.assetCode,
+      assetIssuer: proof.assetIssuer,
+      periodStart: proof.periodStart ?? proof.createdAt,
+      periodEnd: proof.periodEnd ?? proof.createdAt,
+      qualifyingPaymentCount:
+        typeof policy["qualifyingPaymentCount"] === "number"
+          ? policy["qualifyingPaymentCount"]
+          : 0,
+      sourceCount:
+        typeof policy["sourceCount"] === "number" ? policy["sourceCount"] : 0,
+      issuedAt: proof.createdAt,
+      expiresAt: proof.expiresAt,
+    });
+  }
+
   private signCredential<T extends EarnProofCredential>(credential: T) {
     const canonicalPayload = canonicalize(credential);
     return {
@@ -1206,6 +1474,23 @@ export class ProofsService {
       return this.parseAmount(
         this.paymentEncryptionKeyring.decrypt(amountEncrypted),
       );
+    } catch {
+      throw new BadRequestException("Selected payment amount is unavailable");
+    }
+  }
+
+  /**
+   * Returns the decrypted amount as its original decimal string, so the
+   * aggregate-earnings policy can apply its own normalization and rounding
+   * rules instead of inheriting `parseAmount`'s implicit 7-decimal padding.
+   */
+  private revealAmountDecimal(amountEncrypted: string | null) {
+    if (!amountEncrypted) {
+      throw new BadRequestException("Selected payment amount is unavailable");
+    }
+
+    try {
+      return this.paymentEncryptionKeyring.decrypt(amountEncrypted);
     } catch {
       throw new BadRequestException("Selected payment amount is unavailable");
     }

@@ -25,6 +25,7 @@ Implemented:
 - Incoming Stellar testnet payment synchronization at `/api/v1/payments/sync`
 - Authenticated payment listing, detail lookup, and manual classification
 - Minimum-income proof creation at `/api/v1/proofs/minimum-income`
+- Bounded aggregate-earnings proof creation at `/api/v1/proofs/aggregate-earnings`
 - Public proof verification at `/api/v1/proofs/:id/verify`
 - Authenticated proof revocation at `/api/v1/proofs/:id/revoke`
 - Deterministic credential canonicalization, hashing, and HMAC signing

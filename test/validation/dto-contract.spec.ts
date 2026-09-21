@@ -1,5 +1,6 @@
 import { CreateChallengeDto } from "../../src/auth/dto/create-challenge.dto";
 import { VerifyChallengeDto } from "../../src/auth/dto/verify-challenge.dto";
+import { CreateAggregateEarningsProofDto } from "../../src/proofs/dto/create-aggregate-earnings-proof.dto";
 import { CreatePaymentReceiptProofDto } from "../../src/proofs/dto/create-payment-receipt-proof.dto";
 import { CreateMinimumIncomeProofDto } from "../../src/proofs/dto/create-minimum-income-proof.dto";
 import {
@@ -255,6 +256,78 @@ describe("CreateRecurringIncomeProofDto validation contract", () => {
 
   it("rejects an unknown field", async () => {
     const violations = await validateDto(CreateRecurringIncomeProofDto, {
+      ...valid,
+      ...COMMON_UNKNOWN_FIELD,
+    });
+    expect(violations.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CreateAggregateEarningsProofDto
+// ---------------------------------------------------------------------------
+
+describe("CreateAggregateEarningsProofDto validation contract", () => {
+  const valid = {
+    selectedPaymentIds: ["pay_1", "pay_2"],
+    assetCode: "USDC",
+    assetIssuer: "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGLA1PIC4CEXLRTKHB0EGB",
+    periodStart: "2025-01-01T00:00:00.000Z",
+    periodEnd: "2025-12-31T23:59:59.000Z",
+  };
+
+  it("accepts a well-formed single-asset request", async () => {
+    expect(await isValidDto(CreateAggregateEarningsProofDto, valid)).toBe(true);
+  });
+
+  it("accepts the optional fields at their boundaries", async () => {
+    expect(
+      await isValidDto(CreateAggregateEarningsProofDto, {
+        ...valid,
+        conversionPolicy: "oracle-spot/v1",
+        expiresInDays: 1,
+      }),
+    ).toBe(true);
+    expect(
+      await isValidDto(CreateAggregateEarningsProofDto, {
+        ...valid,
+        expiresInDays: 365,
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts a request without an assetIssuer (native XLM)", async () => {
+    expect(
+      await isValidDto(CreateAggregateEarningsProofDto, {
+        ...valid,
+        assetCode: "XLM",
+        assetIssuer: undefined,
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["empty selectedPaymentIds array", { ...valid, selectedPaymentIds: [] }],
+    [
+      "selectedPaymentIds with a non-string element",
+      { ...valid, selectedPaymentIds: ["pay_1", 42] },
+    ],
+    ["missing assetCode", { ...valid, assetCode: undefined }],
+    ["periodStart not a date string", { ...valid, periodStart: "yesterday" }],
+    ["periodEnd not a date string", { ...valid, periodEnd: "later" }],
+    ["non-string conversionPolicy", { ...valid, conversionPolicy: 42 }],
+    ["expiresInDays below minimum", { ...valid, expiresInDays: 0 }],
+    ["expiresInDays above maximum", { ...valid, expiresInDays: 366 }],
+  ])("rejects a request with %s", async (_label, plain) => {
+    const violations = await validateDto(
+      CreateAggregateEarningsProofDto,
+      plain,
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
+  it("rejects an unknown field", async () => {
+    const violations = await validateDto(CreateAggregateEarningsProofDto, {
       ...valid,
       ...COMMON_UNKNOWN_FIELD,
     });

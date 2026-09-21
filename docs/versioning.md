@@ -14,7 +14,7 @@ must never happen without approval.
 | Surface | Where | Version marker | Owner |
 |---|---|---|---|
 | REST routes and DTOs | `src/**/dto/`, controllers | `api/v1` global prefix | Backend maintainers |
-| Credential schemas | `src/credentials/` | `earnproof.minimum-income.v1` | Backend maintainers + issuer integrations |
+| Credential schemas | `src/credentials/` | `earnproof.minimum-income.v1`, `earnproof.aggregate-earnings.v1` | Backend maintainers + issuer integrations |
 | Webhook envelopes | `src/webhooks/` | `specVersion: "1"` | Backend maintainers |
 | Contract bindings | `src/stellar/` | on-chain schema version | Contract maintainers |
 
