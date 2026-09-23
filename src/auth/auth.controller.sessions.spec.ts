@@ -12,7 +12,7 @@ describe("AuthController - Session Inventory & Revocation", () => {
 
   const mockCurrentSession: AuthenticatedSession = {
     sessionId: "sess_current",
-    userId: "user_1",
+    id: "user_1",
     walletAddress: "GABC...",
     walletHash: "sha256:abc",
     role: "WORKER",
@@ -516,7 +516,6 @@ describe("AuthController - Session Inventory & Revocation", () => {
       ).rejects.toThrow(NotFoundException);
     });
   });
-});
 
   describe("POST /auth/sessions/revoke-all-others - Bulk Revocation Tests", () => {
     it("revokes multiple sessions in a single atomic operation", async () => {
