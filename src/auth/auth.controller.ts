@@ -183,7 +183,7 @@ export class AuthController {
   @Get("sessions")
   async listSessions(@CurrentUser() session: AuthenticatedSession) {
     const sessions = await this.sessionService.listSessions(
-      session.userId,
+      session.id,
       session.sessionId,
     );
 
@@ -251,7 +251,7 @@ export class AuthController {
 
     const revoked = await this.sessionService.revokeSpecificSession(
       body.sessionId,
-      session.userId,
+      session.id,
     );
 
     if (!revoked) {
@@ -289,7 +289,7 @@ export class AuthController {
   @Post("sessions/revoke-all-others")
   async revokeAllOtherSessions(@CurrentUser() session: AuthenticatedSession) {
     const revokedCount = await this.sessionService.revokeAllOtherSessions(
-      session.userId,
+      session.id,
       session.sessionId,
     );
 
