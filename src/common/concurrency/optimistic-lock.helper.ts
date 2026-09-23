@@ -1,5 +1,4 @@
 import { ConflictException } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
 import { ApiErrorCode } from '../dto/api-error.dto';
 
 /**
