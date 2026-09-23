@@ -32,6 +32,7 @@ describe("OrganizationsService", () => {
     slug: "test-org",
     website: "https://example.com",
     status: ResourceStatus.PENDING,
+    revision: 1,
     createdById: mockUser.id,
     createdAt: new Date("2026-01-01"),
     updatedAt: new Date("2026-01-01"),
@@ -47,6 +48,7 @@ describe("OrganizationsService", () => {
             organization: {
               create: jest.fn(),
               update: jest.fn(),
+              updateMany: jest.fn(),
               findFirst: jest.fn(),
               findUnique: jest.fn(),
               findMany: jest.fn(),
@@ -58,6 +60,12 @@ describe("OrganizationsService", () => {
             auditLog: {
               create: jest.fn(),
             },
+            $transaction: jest.fn((callback) => callback({
+              organization: {
+                updateMany: jest.fn(),
+                findUnique: jest.fn(),
+              },
+            })),
           },
         },
       ],
@@ -86,6 +94,7 @@ describe("OrganizationsService", () => {
       expect(result.id).toBe(mockOrganization.id);
       expect(result.name).toBe(input.name);
       expect(result.status).toBe(ResourceStatus.PENDING);
+      expect(result.revision).toBe(1);
       expect(prisma.organization.create).toHaveBeenCalledWith({
         data: {
           name: input.name,
@@ -149,6 +158,131 @@ describe("OrganizationsService", () => {
         }),
       });
     });
+  });
+
+  describe("updateOrganization - revision checking", () => {
+    it("should reject update when revision is stale", async () => {
+      const input = {
+        revision: 1,
+        name: "Updated Name",
+      };
+
+      const orgWithLatestRevision = {
+        ...mockOrganization,
+        revision: 2,
+      };
+
+      jest
+        .spyOn(prisma.organization, "findFirst")
+        .mockResolvedValue(orgWithLatestRevision);
+
+      await expect(
+        service.updateOrganization(mockUser, "org-1", input),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it("should include current revision in conflict response", async () => {
+      const input = {
+        revision: 1,
+        name: "Updated Name",
+      };
+
+      const orgWithLatestRevision = {
+        ...mockOrganization,
+        revision: 2,
+      };
+
+      jest
+        .spyOn(prisma.organization, "findFirst")
+        .mockResolvedValue(orgWithLatestRevision);
+
+      try {
+        await service.updateOrganization(mockUser, "org-1", input);
+        fail("Should have thrown ConflictException");
+      } catch (e) {
+        expect(e).toBeInstanceOf(ConflictException);
+        const errorMessage = (e as ConflictException).getResponse() as any;
+        expect(errorMessage).toContain("2"); // current revision
+      }
+    });
+
+    it("should atomically update and increment revision", async () => {
+      const input = {
+        revision: 1,
+        name: "Updated Name",
+      };
+
+      jest
+        .spyOn(prisma.organization, "findFirst")
+        .mockResolvedValue(mockOrganization);
+
+      const mockTx = {
+        organization: {
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({
+              ...mockOrganization,
+              name: "Updated Name",
+              revision: 2,
+            }),
+        },
+      };
+
+      jest.spyOn(prisma, "$transaction").mockImplementation((fn: any) => {
+        return fn(mockTx);
+      });
+
+      jest.spyOn(prisma.auditLog, "create").mockResolvedValue({} as any);
+
+      const result = await service.updateOrganization(mockUser, "org-1", input);
+
+      expect(result.name).toBe("Updated Name");
+      expect(result.revision).toBe(2);
+      expect(mockTx.organization.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: "org-1",
+          revision: 1, // Double-check
+        },
+        data: {
+          name: "Updated Name",
+          revision: 2, // Incremented
+        },
+      });
+    });
+
+    it("should fail update if concurrent write detected", async () => {
+      const input = {
+        revision: 1,
+        name: "Updated Name",
+      };
+
+      jest
+        .spyOn(prisma.organization, "findFirst")
+        .mockResolvedValue(mockOrganization);
+
+      const mockTx = {
+        organization: {
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }), // No rows matched
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({
+              ...mockOrganization,
+              revision: 2,
+            }),
+        },
+      };
+
+      jest.spyOn(prisma, "$transaction").mockImplementation((fn: any) => {
+        return fn(mockTx);
+      });
+
+      await expect(
+        service.updateOrganization(mockUser, "org-1", input),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
+});    });
   });
 
   describe("updateOrganization", () => {
