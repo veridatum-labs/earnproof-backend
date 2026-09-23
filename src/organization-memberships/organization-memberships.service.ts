@@ -3,7 +3,6 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
-  BadRequestException,
 } from "@nestjs/common";
 import { OrganizationRole } from "@prisma/client";
 import { AuthenticatedUser } from "../auth/auth.types";
@@ -45,7 +44,7 @@ export class OrganizationMembershipsService {
     }
 
     // 3. Find or create user by wallet address
-    let targetUser = await this.prisma.user.findUnique({
+    const targetUser = await this.prisma.user.findUnique({
       where: { walletAddress: input.walletAddress },
     });
 

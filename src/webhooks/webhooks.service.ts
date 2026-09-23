@@ -114,7 +114,7 @@ export class WebhooksService {
    * attempt, since they re-decrypt at execution time).
    */
   async rotateSecret(organizationId: string, webhookId: string) {
-    const webhook = await this.assertOwnedWebhook(organizationId, webhookId);
+    await this.assertOwnedWebhook(organizationId, webhookId);
 
     const newRawSecret = randomBytes(SECRET_BYTES).toString("hex");
     const newSecretEncrypted = this.paymentEncryptionKeyring.encrypt(newRawSecret);

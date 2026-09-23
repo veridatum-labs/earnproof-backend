@@ -282,8 +282,6 @@ describe("OrganizationsService", () => {
       ).rejects.toThrow(ConflictException);
     });
   });
-});    });
-  });
 
   describe("updateOrganization", () => {
     it("should update organization when user is creator", async () => {
