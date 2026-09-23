@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, UseGuards, BadRequestException, NotFoundException } from "@nestjs/common";
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -12,7 +12,10 @@ import { AuthenticatedSession } from "./auth.types";
 import { AuthService } from "./auth.service";
 import { ChallengeResponseDto } from "./dto/challenge-response.dto";
 import { CreateChallengeDto } from "./dto/create-challenge.dto";
+import { ListSessionsResponseDto, SessionSummaryDto } from "./dto/list-sessions-response.dto";
 import { LogoutResponseDto } from "./dto/logout-response.dto";
+import { RevokeSessionRequestDto } from "./dto/revoke-session-request.dto";
+import { RevokeSessionResponseDto, RevokeAllOtherSessionsResponseDto } from "./dto/revoke-session-response.dto";
 import { RotateResponseDto } from "./dto/rotate-response.dto";
 import { SessionResponseDto } from "./dto/session-response.dto";
 import { VerifyChallengeDto } from "./dto/verify-challenge.dto";
@@ -156,5 +159,144 @@ export class AuthController {
     );
 
     return { token, tokenType: "Bearer", sessionId, expiresAt };
+  }
+
+  @ApiOperation({
+    summary: "List all sessions for the authenticated user",
+    description:
+      "Returns all sessions (active, revoked, and expired) with safe, non-sensitive metadata. " +
+      "Does not include raw tokens or full fingerprints. Scoped to the authenticated user only.",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "Sessions retrieved successfully.",
+    type: ListSessionsResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, expired, or revoked.",
+    type: ApiErrorDto,
+  })
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Get("sessions")
+  async listSessions(@CurrentUser() session: AuthenticatedSession) {
+    const sessions = await this.sessionService.listSessions(
+      session.userId,
+      session.sessionId,
+    );
+
+    // Transform Date objects to ISO-8601 strings for the DTO
+    const sessionSummaries: SessionSummaryDto[] = sessions.map((s) => ({
+      sessionId: s.sessionId,
+      createdAt: s.createdAt.toISOString(),
+      expiresAt: s.expiresAt.toISOString(),
+      lastUsedAt: s.lastUsedAt?.toISOString() ?? null,
+      revokedAt: s.revokedAt?.toISOString() ?? null,
+      isActive: s.isActive,
+      isCurrent: s.isCurrent,
+    }));
+
+    const activeCount = sessionSummaries.filter((s) => s.isActive).length;
+
+    return {
+      sessions: sessionSummaries,
+      totalCount: sessionSummaries.length,
+      activeCount,
+    };
+  }
+
+  @ApiOperation({
+    summary: "Revoke a specific other session",
+    description:
+      "Revokes a session that belongs to the authenticated user. The session is invalidated " +
+      "immediately and cannot be used for future requests. Idempotent — revoking an already-revoked " +
+      "session returns success. The current session cannot be revoked via this endpoint; use logout instead.",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "Session revoked successfully.",
+    type: RevokeSessionResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, expired, or revoked.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    description: "Request body failed validation.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: "The session does not exist or does not belong to the authenticated user.",
+    type: ApiErrorDto,
+  })
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post("sessions/revoke")
+  async revokeSpecificSession(
+    @CurrentUser() session: AuthenticatedSession,
+    @Body() body: RevokeSessionRequestDto,
+  ) {
+    // Prevent users from accidentally revoking their current session via this endpoint
+    if (body.sessionId === session.sessionId) {
+      throw new BadRequestException(
+        "Cannot revoke current session via this endpoint. Use POST /auth/logout instead.",
+      );
+    }
+
+    const revoked = await this.sessionService.revokeSpecificSession(
+      body.sessionId,
+      session.userId,
+    );
+
+    if (!revoked) {
+      throw new NotFoundException(
+        "Session not found or does not belong to you.",
+      );
+    }
+
+    return {
+      sessionId: body.sessionId,
+      status: "Session revoked successfully",
+    };
+  }
+
+  @ApiOperation({
+    summary: "Revoke all other sessions",
+    description:
+      "Revokes all active sessions for the authenticated user except the current one. " +
+      "Useful for forcing logout on all other devices after a suspected compromise. " +
+      "The current session is always preserved. Returns the count of sessions revoked.",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "All other sessions revoked successfully.",
+    type: RevokeAllOtherSessionsResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, expired, or revoked.",
+    type: ApiErrorDto,
+  })
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post("sessions/revoke-all-others")
+  async revokeAllOtherSessions(@CurrentUser() session: AuthenticatedSession) {
+    const revokedCount = await this.sessionService.revokeAllOtherSessions(
+      session.userId,
+      session.sessionId,
+    );
+
+    return {
+      revokedCount,
+      currentSessionId: session.sessionId,
+      status: `${revokedCount} other sessions revoked successfully`,
+    };
   }
 }

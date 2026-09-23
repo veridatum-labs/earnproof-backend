@@ -241,6 +241,104 @@ export class SessionService {
   }
 
   /**
+   * List all sessions for a user, including active, revoked, and expired sessions.
+   * Returns only safe, non-sensitive metadata (timestamps, activity flags).
+   *
+   * @param userId          The user ID to list sessions for.
+   * @param currentSessionId The session ID of the requesting session (for marking as current).
+   * @returns               Array of session summaries ordered by createdAt descending.
+   */
+  async listSessions(
+    userId: string,
+    currentSessionId: string,
+  ): Promise<Array<{
+    sessionId: string;
+    createdAt: Date;
+    expiresAt: Date;
+    lastUsedAt: Date | null;
+    revokedAt: Date | null;
+    isActive: boolean;
+    isCurrent: boolean;
+  }>> {
+    const now = this.clock.now();
+    const sessions = await this.prisma.authSession.findMany({
+      where: { userId },
+      select: {
+        id: true,
+        createdAt: true,
+        expiresAt: true,
+        lastUsedAt: true,
+        revokedAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return sessions.map((session) => {
+      // A session is active if it's not revoked and hasn't expired yet.
+      const isActive = session.revokedAt === null && session.expiresAt > now;
+
+      return {
+        sessionId: session.id,
+        createdAt: session.createdAt,
+        expiresAt: session.expiresAt,
+        lastUsedAt: session.lastUsedAt,
+        revokedAt: session.revokedAt,
+        isActive,
+        isCurrent: session.id === currentSessionId,
+      };
+    });
+  }
+
+  /**
+   * Revoke a specific session by its database id, scoped to a user.
+   * Idempotent — revoking an already-revoked session is a no-op.
+   * Fails if the session does not belong to the specified user.
+   *
+   * @param sessionId  The AuthSession.id (NOT the raw token).
+   * @param userId     The user ID that must own this session.
+   * @returns          true if the session was revoked, false if it didn't exist or wasn't owned by the user.
+   */
+  async revokeSpecificSession(
+    sessionId: string,
+    userId: string,
+  ): Promise<boolean> {
+    const result = await this.prisma.authSession.updateMany({
+      where: {
+        id: sessionId,
+        userId, // Ensure ownership — never allow cross-user revocation
+        revokedAt: null, // idempotent guard: only update if not already revoked
+      },
+      data: { revokedAt: this.clock.now() },
+    });
+
+    return result.count > 0;
+  }
+
+  /**
+   * Revoke all sessions for a user except one specified session (the current session).
+   * This prevents accidental lockout during a bulk "revoke all others" operation.
+   *
+   * @param userId             The user ID.
+   * @param currentSessionId    The session ID to exclude from revocation (typically the current session).
+   * @returns                  Number of sessions revoked (not including the current session).
+   */
+  async revokeAllOtherSessions(
+    userId: string,
+    currentSessionId: string,
+  ): Promise<number> {
+    const result = await this.prisma.authSession.updateMany({
+      where: {
+        userId,
+        id: { not: currentSessionId }, // Exclude the current session
+        revokedAt: null, // Only revoke active sessions
+      },
+      data: { revokedAt: this.clock.now() },
+    });
+
+    return result.count;
+  }
+
+  /**
    * Delete session rows that expired before `olderThan` (defaults to now).
    * Intended to be called by a scheduled cleanup job.
    *

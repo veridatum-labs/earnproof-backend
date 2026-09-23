@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -7,6 +8,7 @@ import { ConfigService } from "@nestjs/config";
 import { ResourceStatus } from "@prisma/client";
 import { randomBytes } from "crypto";
 import { PaymentEncryptionKeyringService } from "../common/crypto/payment-encryption-keyring.service";
+import { OptimisticLockHelper } from "../common/concurrency";
 import { PrismaService } from "../database/prisma.service";
 import { CreateWebhookDto } from "./dto/create-webhook.dto";
 import { UpdateWebhookEventsDto } from "./dto/update-webhook-events.dto";
@@ -55,6 +57,7 @@ export class WebhooksService {
         url: true,
         events: true,
         status: true,
+        revision: true,
         createdAt: true,
       },
     });
@@ -76,6 +79,7 @@ export class WebhooksService {
         url: true,
         events: true,
         status: true,
+        revision: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -92,6 +96,7 @@ export class WebhooksService {
         url: true,
         events: true,
         status: true,
+        revision: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -109,14 +114,19 @@ export class WebhooksService {
    * attempt, since they re-decrypt at execution time).
    */
   async rotateSecret(organizationId: string, webhookId: string) {
-    await this.assertOwnedWebhook(organizationId, webhookId);
+    const webhook = await this.assertOwnedWebhook(organizationId, webhookId);
 
     const newRawSecret = randomBytes(SECRET_BYTES).toString("hex");
     const newSecretEncrypted = this.paymentEncryptionKeyring.encrypt(newRawSecret);
 
     await this.prisma.webhook.update({
       where: { id: webhookId },
-      data: { secretEncrypted: newSecretEncrypted },
+      data: {
+        secretEncrypted: newSecretEncrypted,
+        revision: {
+          increment: 1,
+        },
+      },
     });
 
     return {
@@ -133,14 +143,60 @@ export class WebhooksService {
     webhookId: string,
     dto: UpdateWebhookEventsDto,
   ) {
-    await this.assertOwnedWebhook(organizationId, webhookId);
+    const webhook = await this.assertOwnedWebhook(organizationId, webhookId);
+
+    // Check revision before applying update
+    OptimisticLockHelper.checkRevision({
+      resourceType: "Webhook",
+      resourceId: webhookId,
+      expectedRevision: dto.revision,
+      currentRevision: webhook.revision,
+    });
+
     const events = [...new Set(dto.events)];
 
-    return this.prisma.webhook.update({
-      where: { id: webhookId },
-      data: { events },
-      select: { id: true, url: true, events: true, status: true, updatedAt: true },
+    // Atomically update webhook and increment revision in a transaction
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.webhook.updateMany({
+        where: {
+          id: webhookId,
+          revision: webhook.revision, // Double-check that revision hasn't changed
+        },
+        data: {
+          events,
+          revision: OptimisticLockHelper.incrementRevision(webhook.revision),
+        },
+      });
+
+      // If no rows were updated, the revision check failed (concurrent write)
+      if (result.count === 0) {
+        const current = await tx.webhook.findUnique({
+          where: { id: webhookId },
+        });
+        throw new ConflictException(
+          JSON.stringify({
+            code: "CONFLICT",
+            message: `Webhook has been modified. Expected revision ${webhook.revision}, but current revision is ${current?.revision}. Please refresh and retry.`,
+            currentRevision: current?.revision,
+          }),
+        );
+      }
+
+      // Fetch the updated record
+      return tx.webhook.findUnique({
+        where: { id: webhookId },
+        select: {
+          id: true,
+          url: true,
+          events: true,
+          status: true,
+          revision: true,
+          updatedAt: true,
+        },
+      });
     });
+
+    return updated;
   }
 
   /** Disable (suspend) a webhook endpoint without deleting it. */
@@ -149,8 +205,18 @@ export class WebhooksService {
 
     return this.prisma.webhook.update({
       where: { id: webhookId },
-      data: { status: ResourceStatus.SUSPENDED },
-      select: { id: true, status: true, updatedAt: true },
+      data: {
+        status: ResourceStatus.SUSPENDED,
+        revision: {
+          increment: 1,
+        },
+      },
+      select: {
+        id: true,
+        status: true,
+        revision: true,
+        updatedAt: true,
+      },
     });
   }
 
@@ -160,8 +226,18 @@ export class WebhooksService {
 
     return this.prisma.webhook.update({
       where: { id: webhookId },
-      data: { status: ResourceStatus.ACTIVE },
-      select: { id: true, status: true, updatedAt: true },
+      data: {
+        status: ResourceStatus.ACTIVE,
+        revision: {
+          increment: 1,
+        },
+      },
+      select: {
+        id: true,
+        status: true,
+        revision: true,
+        updatedAt: true,
+      },
     });
   }
 
@@ -171,7 +247,12 @@ export class WebhooksService {
 
     await this.prisma.webhook.update({
       where: { id: webhookId },
-      data: { status: ResourceStatus.DELETED },
+      data: {
+        status: ResourceStatus.DELETED,
+        revision: {
+          increment: 1,
+        },
+      },
     });
 
     return { deleted: true, webhookId };
@@ -272,7 +353,7 @@ export class WebhooksService {
   private async assertOwnedWebhook(organizationId: string, webhookId: string) {
     const webhook = await this.prisma.webhook.findUnique({
       where: { id: webhookId },
-      select: { id: true, organizationId: true, status: true },
+      select: { id: true, organizationId: true, status: true, revision: true },
     });
     this.assertOwnership(webhook, organizationId, webhookId);
     return webhook!;

@@ -9,6 +9,7 @@ import { Prisma, ResourceStatus } from "@prisma/client";
 import { createHash } from "crypto";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { sha256 } from "../common/crypto/hash";
+import { OptimisticLockHelper } from "../common/concurrency";
 import { PrismaService } from "../database/prisma.service";
 import { IssuerRegistryService } from "./issuer-registry.service";
 import { CreateIssuerDto } from "./dto/create-issuer.dto";
@@ -112,17 +113,52 @@ export class IssuersService {
     }
 
     const issuer = await this.getIssuerById(issuerId);
+
+    // Check revision before applying update
+    OptimisticLockHelper.checkRevision({
+      resourceType: "Issuer",
+      resourceId: issuerId,
+      expectedRevision: input.revision,
+      currentRevision: issuer.revision,
+    });
+
     const publicMetadata = this.allowlistedMetadata(input.publicMetadata);
     const metadataHash = this.hashMetadata(publicMetadata);
 
-    const updated = await this.prisma.issuer.update({
-      where: { id: issuerId },
-      data: {
-        metadataHash,
-        publicMetadata,
-        contractSyncState: "PENDING",
-        contractSyncError: null,
-      },
+    // Atomically update issuer and increment revision in a transaction
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.issuer.updateMany({
+        where: {
+          id: issuerId,
+          revision: issuer.revision, // Double-check that revision hasn't changed
+        },
+        data: {
+          metadataHash,
+          publicMetadata,
+          contractSyncState: "PENDING",
+          contractSyncError: null,
+          revision: OptimisticLockHelper.incrementRevision(issuer.revision),
+        },
+      });
+
+      // If no rows were updated, the revision check failed (concurrent write)
+      if (result.count === 0) {
+        const current = await tx.issuer.findUnique({
+          where: { id: issuerId },
+        });
+        throw new ConflictException(
+          JSON.stringify({
+            code: "CONFLICT",
+            message: `Issuer has been modified. Expected revision ${issuer.revision}, but current revision is ${current?.revision}. Please refresh and retry.`,
+            currentRevision: current?.revision,
+          }),
+        );
+      }
+
+      // Fetch the updated record
+      return tx.issuer.findUnique({
+        where: { id: issuerId },
+      });
     });
 
     // Log audit event
@@ -146,6 +182,14 @@ export class IssuersService {
 
     const issuer = await this.getIssuerById(issuerId);
 
+    // Check revision before applying update
+    OptimisticLockHelper.checkRevision({
+      resourceType: "Issuer",
+      resourceId: issuerId,
+      expectedRevision: input.revision,
+      currentRevision: issuer.revision,
+    });
+
     // Validate status transition
     const validNextStatuses = VALID_TRANSITIONS[issuer.status];
     if (!validNextStatuses.includes(input.status)) {
@@ -160,6 +204,7 @@ export class IssuersService {
       status: input.status,
       contractSyncState: "PENDING",
       contractSyncError: null,
+      revision: OptimisticLockHelper.incrementRevision(issuer.revision),
     };
 
     // Update timestamp fields based on transition
@@ -177,9 +222,34 @@ export class IssuersService {
       updateData.revokedAt = now;
     }
 
-    const updated = await this.prisma.issuer.update({
-      where: { id: issuerId },
-      data: updateData,
+    // Atomically update issuer and increment revision in a transaction
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.issuer.updateMany({
+        where: {
+          id: issuerId,
+          revision: issuer.revision, // Double-check that revision hasn't changed
+        },
+        data: updateData,
+      });
+
+      // If no rows were updated, the revision check failed (concurrent write)
+      if (result.count === 0) {
+        const current = await tx.issuer.findUnique({
+          where: { id: issuerId },
+        });
+        throw new ConflictException(
+          JSON.stringify({
+            code: "CONFLICT",
+            message: `Issuer has been modified. Expected revision ${issuer.revision}, but current revision is ${current?.revision}. Please refresh and retry.`,
+            currentRevision: current?.revision,
+          }),
+        );
+      }
+
+      // Fetch the updated record
+      return tx.issuer.findUnique({
+        where: { id: issuerId },
+      });
     });
 
     // Log audit event
@@ -326,11 +396,13 @@ export class IssuersService {
               contractTransactionHash: result.transactionHash,
               contractSyncedAt: syncedAt,
               contractSyncError: null,
+              revision: OptimisticLockHelper.incrementRevision(issuer.revision),
             }
           : {
               contractSyncState: state,
               contractSyncError:
                 result.state === "failed" ? result.error : result.reason,
+              revision: OptimisticLockHelper.incrementRevision(issuer.revision),
             },
     });
     await this.createAuditLog(user, "SYNC_STATUS", "Issuer", issuerId, {
@@ -411,6 +483,7 @@ export class IssuersService {
       organizationId: issuer.organizationId,
       stellarAddress: issuer.stellarAddress,
       status: issuer.status,
+      revision: issuer.revision,
       metadataHash: issuer.metadataHash,
       publicMetadata: this.allowlistedMetadata(issuer.publicMetadata),
       contractSyncState: issuer.contractSyncState,
