@@ -126,8 +126,37 @@ None
 - Endpoints tested with sample requests
 - Concurrency scenarios validated with integration tests
 
+## Compatibility
+
+All public-contract DTO changes in this PR are **additive only**:
+
+- New optional fields added to request/response DTOs
+- No existing fields removed or renamed
+- No required request fields added
+- All changes preserve backward compatibility with existing clients
+
+**Compatibility note: additive only**
+
+```json
+{
+  "surfaces": [
+    "rest.dto.auth.sessions",
+    "rest.dto.issuers",
+    "rest.dto.organizations",
+    "rest.dto.organization-memberships",
+    "rest.dto.trusted-sources",
+    "rest.dto.webhooks"
+  ],
+  "changeType": "additive",
+  "description": "New session management and organization membership endpoints with additive DTO changes. All changes are backward compatible.",
+  "breaking": false
+}
+```
+
 ## Closes
 - Closes #87
 - Closes #155
 - Closes #152
 - Closes #151
+
+
