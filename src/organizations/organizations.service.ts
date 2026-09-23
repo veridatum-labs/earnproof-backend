@@ -146,9 +146,18 @@ export class OrganizationsService {
       where.status = query.status;
     }
 
-    // Non-admins only see organizations they created
+    // Non-admins see organizations they created OR are members of
     if (user.role !== "ADMIN") {
-      where.createdById = user.id;
+      where.OR = [
+        { createdById: user.id },
+        {
+          memberships: {
+            some: {
+              userId: user.id,
+            },
+          },
+        },
+      ];
     }
 
     const [items, total] = await Promise.all([
@@ -196,20 +205,49 @@ export class OrganizationsService {
   }
 
   /**
-   * Fetch ownership and existence in one scoped query. A non-admin receives
-   * the same 404 for another tenant and for an absent/deleted resource, so a
-   * denied request cannot become an existence oracle.
+   * Get an organization with visibility checks based on user role and membership.
+   * Admins can see all organizations.
+   * Non-admins can only see organizations where they are members or creators.
+   * Scoped query prevents permission oracle attacks.
    */
-  private async getVisibleOrganization(
+  async getVisibleOrganization(
     user: AuthenticatedUser,
     organizationId: string,
   ) {
+    // For admins, no membership check needed
+    if (user.role === "ADMIN") {
+      const org = await this.prisma.organization.findUnique({
+        where: { id: organizationId },
+      });
+      if (!org) throw new NotFoundException("Organization not found");
+      return org;
+    }
+
+    // For non-admins: check if they are a member OR creator of the organization
     const org = await this.prisma.organization.findFirst({
-      where: user.role === "ADMIN" ? { id: organizationId } : {
+      where: {
         id: organizationId,
-        createdById: user.id,
+        OR: [
+          // Creator (implicit owner from legacy model)
+          { createdById: user.id },
+          // Explicit member through membership table
+          {
+            memberships: {
+              some: {
+                userId: user.id,
+              },
+            },
+          },
+        ],
+      },
+      include: {
+        memberships: {
+          where: { userId: user.id },
+          select: { role: true },
+        },
       },
     });
+
     if (!org) throw new NotFoundException("Organization not found");
     return org;
   }

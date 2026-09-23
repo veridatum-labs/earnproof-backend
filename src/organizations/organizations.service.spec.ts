@@ -366,7 +366,7 @@ describe("OrganizationsService", () => {
       );
     });
 
-    it("should restrict non-admin users to their own organizations", async () => {
+    it("should restrict non-admin users to their own organizations and memberships", async () => {
       jest
         .spyOn(prisma.organization, "findMany")
         .mockResolvedValue([mockOrganization]);
@@ -378,7 +378,16 @@ describe("OrganizationsService", () => {
       expect(prisma.organization.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            createdById: mockIssuerUser.id,
+            OR: expect.arrayContaining([
+              { createdById: mockIssuerUser.id },
+              expect.objectContaining({
+                memberships: {
+                  some: {
+                    userId: mockIssuerUser.id,
+                  },
+                },
+              }),
+            ]),
           }),
         }),
       );
