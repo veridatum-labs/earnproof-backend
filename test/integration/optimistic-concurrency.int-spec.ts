@@ -213,7 +213,11 @@ describe("Optimistic Concurrency Control Integration Tests", () => {
         expect(failed.length).toBeGreaterThanOrEqual(0); // May fail or succeed depending on timing
       } catch (e) {
         // Either success or conflict is acceptable
-        expect([ConflictException]).toContainEqual(e.constructor);
+        if (e instanceof Error) {
+          expect([ConflictException]).toContainEqual(e.constructor);
+        } else {
+          throw e;
+        }
       }
     });
 
@@ -400,7 +404,9 @@ describe("Optimistic Concurrency Control Integration Tests", () => {
       } catch (error) {
         // Should get 403 Forbidden, not 409 Conflict
         expect(error).toBeInstanceOf(Error);
-        expect(error.message).toContain("not found"); // NotFoundException for non-admins accessing other's org
+        if (error instanceof Error) {
+          expect(error.message).toContain("not found"); // NotFoundException for non-admins accessing other's org
+        }
       }
     });
   });
