@@ -582,6 +582,10 @@ describe("AuthController - Session Inventory & Revocation", () => {
         "sess_current",
       );
     });
+        "user_1",
+        "sess_current",
+      );
+    });
 
     it("handles device loss scenario: user revokes all other sessions after compromise", async () => {
       // Real-world scenario: user suspects device compromise, wants to force logout everywhere
