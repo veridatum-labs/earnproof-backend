@@ -163,6 +163,36 @@ first, so a contributor with three breaks does not go through three review
 cycles. It reports nothing on an unchanged surface: a check that fires on
 no-op diffs gets ignored within a week, and then it protects nothing.
 
+## Recent compatibility notes
+
+### Session Management and Organization Membership (PR #XXX)
+
+**Date:** 2026-09-23
+
+**Surfaces affected:**
+- `rest.dto.auth.sessions` - New session management endpoints
+- `rest.dto.organizations` - Organization response updates
+- `rest.dto.organization-memberships` - New organization membership surface
+- `rest.dto.issuers` - Issuer response updates
+- `rest.dto.trusted-sources` - Trusted source updates
+- `rest.dto.webhooks` - Webhook updates
+
+**Change type:** Additive
+
+**Description:**
+- Added new optional fields to organization response DTO (for revision tracking)
+- Added new optional fields to issuer response DTO (for revision tracking)
+- Added new optional fields to trusted-source update DTO (for revision tracking)
+- Added new optional fields to webhook update DTO (for revision tracking)
+- Added three new session management DTOs (all additive)
+- Added three new organization membership DTOs (all additive)
+- All changes preserve backward compatibility with existing clients
+- No existing fields removed, renamed, or made required
+
+**Breaking:** No
+
+**Compatibility note:** additive only
+
 ## Trade-off: the surface model is declared, not derived
 
 The contract definitions are written by hand rather than extracted from
