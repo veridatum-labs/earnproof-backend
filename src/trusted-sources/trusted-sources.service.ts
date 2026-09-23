@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
 } from "@nestjs/common";
@@ -7,6 +8,7 @@ import { Prisma, ResourceStatus } from "@prisma/client";
 import { StrKey } from "@stellar/stellar-base";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { sha256 } from "../common/crypto/hash";
+import { OptimisticLockHelper } from "../common/concurrency";
 import { PrismaService } from "../database/prisma.service";
 import { CreateTrustedSourceDto } from "./dto/create-trusted-source.dto";
 import { ListTrustedSourcesDto } from "./dto/list-trusted-sources.dto";
@@ -230,6 +232,7 @@ export class TrustedSourcesService {
       },
       select: {
         id: true,
+        revision: true,
         displayName: true,
         issuerId: true,
       },
@@ -240,6 +243,14 @@ export class TrustedSourcesService {
         "You do not have access to this trusted source.",
       );
     }
+
+    // Check revision before applying update
+    OptimisticLockHelper.checkRevision({
+      resourceType: "TrustedSource",
+      resourceId: trustedSourceId,
+      expectedRevision: input.revision,
+      currentRevision: existing.revision,
+    });
 
     // Validate new issuer if provided
     let newIssuerId: string | null | undefined = undefined;
@@ -268,27 +279,54 @@ export class TrustedSourcesService {
       }
     }
 
-    // Update the trusted source
-    const updated = await this.prisma.trustedSource.update({
-      where: { id: trustedSourceId },
-      data: {
-        displayName: input.displayName !== undefined ? input.displayName : undefined,
-        issuerId: newIssuerId !== undefined ? newIssuerId : undefined,
-      },
-      include: {
-        issuer: {
-          select: {
-            id: true,
-            status: true,
-            organization: {
-              select: {
-                id: true,
-                name: true,
+    // Atomically update trusted source and increment revision in a transaction
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.trustedSource.updateMany({
+        where: {
+          id: trustedSourceId,
+          revision: existing.revision, // Double-check that revision hasn't changed
+        },
+        data: {
+          displayName:
+            input.displayName !== undefined ? input.displayName : undefined,
+          issuerId:
+            newIssuerId !== undefined ? newIssuerId : undefined,
+          revision: OptimisticLockHelper.incrementRevision(existing.revision),
+        },
+      });
+
+      // If no rows were updated, the revision check failed (concurrent write)
+      if (result.count === 0) {
+        const current = await tx.trustedSource.findUnique({
+          where: { id: trustedSourceId },
+        });
+        throw new ConflictException(
+          JSON.stringify({
+            code: "CONFLICT",
+            message: `TrustedSource has been modified. Expected revision ${existing.revision}, but current revision is ${current?.revision}. Please refresh and retry.`,
+            currentRevision: current?.revision,
+          }),
+        );
+      }
+
+      // Fetch the updated record
+      return tx.trustedSource.findUnique({
+        where: { id: trustedSourceId },
+        include: {
+          issuer: {
+            select: {
+              id: true,
+              status: true,
+              organization: {
+                select: {
+                  id: true,
+                  name: true,
+                },
               },
             },
           },
         },
-      },
+      });
     });
 
     // Log audit event
@@ -301,9 +339,9 @@ export class TrustedSourcesService {
         resourceId: trustedSourceId,
         metadata: {
           displayNameChanged:
-            existing.displayName !== updated.displayName,
+            existing.displayName !== updated?.displayName,
           previousIssuerId: existing.issuerId || null,
-          nextIssuerId: updated.issuerId || null,
+          nextIssuerId: updated?.issuerId || null,
         },
       },
     });
@@ -342,6 +380,9 @@ export class TrustedSourcesService {
       where: { id: trustedSourceId },
       data: {
         status: ResourceStatus.DELETED,
+        revision: {
+          increment: 1,
+        },
       },
       include: {
         issuer: {
@@ -391,6 +432,7 @@ export class TrustedSourcesService {
       sourceAddress: record.sourceAddress,
       displayName: record.displayName || null,
       sourceType: record.sourceType || "stellar",
+      revision: record.revision,
       issuer: record.issuer
         ? {
             id: record.issuer.id,
