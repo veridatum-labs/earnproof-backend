@@ -130,30 +130,27 @@ None
 
 ## Compatibility
 
-All public-contract DTO changes in this PR are **additive only**:
+**IMPORTANT: This PR contains BREAKING CHANGES to request DTOs**
 
-- New optional fields added to request/response DTOs
-- No existing fields removed or renamed
-- No required request fields added
-- All changes preserve backward compatibility with existing clients
+All update endpoints for mutable administrative resources now require a new `revision` field for optimistic concurrency control:
 
-**Compatibility note: additive only**
+**Affected Update Endpoints:**
+- `PUT /api/v1/organizations/{id}`
+- `PUT /api/v1/issuers/{id}/metadata`
+- `PUT /api/v1/issuers/{id}/status`
+- `PUT /api/v1/trusted-sources/{id}`
+- `PUT /api/v1/webhooks/{id}/events`
 
-```json
-{
-  "surfaces": [
-    "rest.dto.auth.sessions",
-    "rest.dto.issuers",
-    "rest.dto.organizations",
-    "rest.dto.organization-memberships",
-    "rest.dto.trusted-sources",
-    "rest.dto.webhooks"
-  ],
-  "changeType": "additive",
-  "description": "New session management and organization membership endpoints with additive DTO changes. All changes are backward compatible.",
-  "breaking": false
-}
-```
+**Migration Required:**
+Clients must include the `revision` field (obtained from GET responses) in all update requests. See [MIGRATION-optimistic-concurrency-required.md](docs/migrations/MIGRATION-optimistic-concurrency-required.md) for details.
+
+**Response DTOs:** Additive only - new `revision` field added to responses (backward compatible)
+
+**Request DTOs:** Breaking changes - new required `revision` field added to update requests
+
+**Support Window:** 90 days (until 2026-12-23)
+
+See docs/versioning.md and docs/migrations/MIGRATION-optimistic-concurrency-required.md for full details.
 
 ## Closes
 - Closes #87
