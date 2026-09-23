@@ -164,6 +164,12 @@ model AuthSession {
   @@index([revokedAt])
 }
 
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  READER
+}
+
 model Organization {
   id          String          @id @default(cuid())
   name        String
@@ -177,8 +183,28 @@ model Organization {
   issuers     Issuer[]
   apiKeys     ApiKey[]
   webhooks    Webhook[]
+  memberships OrganizationMembership[]
 
   @@index([status])
+}
+
+/// Explicit organization membership with role-based access control.
+/// Each membership ties one user to one organization with one role.
+/// Unique constraint ensures a user can have only one role per organization.
+/// Cross-organization identifiers are enforced: membership rows are scoped to org,
+/// and guard checks always verify org context matches.
+model OrganizationMembership {
+  id             String             @id @default(cuid())
+  organizationId String
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  role           OrganizationRole   @default(READER)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
 }
 
 model Issuer {

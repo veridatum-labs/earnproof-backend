@@ -16,6 +16,7 @@ import { ObservabilityModule } from "./common/observability/observability.module
 import { JobsModule } from "./jobs/jobs.module";
 import { IssuersModule } from "./issuers/issuers.module";
 import { OrganizationsModule } from "./organizations/organizations.module";
+import { OrganizationMembershipsModule } from "./organization-memberships/organization-memberships.module";
 import { PaymentsModule } from "./payments/payments.module";
 import { ProofsModule } from "./proofs/proofs.module";
 import { TrustedSourcesModule } from "./trusted-sources/trusted-sources.module";
@@ -37,6 +38,7 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
     RateLimitModule,
     HealthModule,
     OrganizationsModule,
+    OrganizationMembershipsModule,
     IssuersModule,
     PaymentsModule,
     ProofsModule,
