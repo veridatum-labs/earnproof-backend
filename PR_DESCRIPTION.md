@@ -4,6 +4,8 @@
 
 This PR consolidates four critical feature implementations that enhance authentication security, session management, administrative resource handling, and organization membership capabilities.
 
+**Compatibility note: additive only** - All DTO changes are backward compatible with no breaking changes.
+
 ## Changes
 
 ### #87 - Fix Critical Authentication Service Bugs Blocking Wallet Verification
