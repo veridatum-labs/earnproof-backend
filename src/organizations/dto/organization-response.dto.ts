@@ -20,6 +20,12 @@ export class OrganizationResponseDto {
   })
   status: ResourceStatus;
 
+  @ApiProperty({
+    description:
+      "Revision counter for optimistic concurrency control. Increment this value and include it in update requests to detect concurrent modifications.",
+  })
+  revision: number;
+
   @ApiProperty({ description: "ID of user who created the organization" })
   createdById: string;
 

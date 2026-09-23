@@ -7,6 +7,7 @@ import {
 import { ResourceStatus } from "@prisma/client";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { PrismaService } from "../database/prisma.service";
+import { OptimisticLockHelper } from "../common/concurrency";
 import { CreateOrganizationDto } from "./dto/create-organization.dto";
 import { ListOrganizationsDto } from "./dto/list-organizations.dto";
 import { OrganizationResponseDto } from "./dto/organization-response.dto";
@@ -60,14 +61,48 @@ export class OrganizationsService {
     organizationId: string,
     input: UpdateOrganizationDto,
   ): Promise<OrganizationResponseDto> {
-    await this.getVisibleOrganization(user, organizationId);
+    const org = await this.getVisibleOrganization(user, organizationId);
 
-    const updated = await this.prisma.organization.update({
-      where: { id: organizationId },
-      data: {
-        ...(input.name && { name: input.name }),
-        ...(input.website !== undefined && { website: input.website || null }),
-      },
+    // Check revision before applying update
+    OptimisticLockHelper.checkRevision({
+      resourceType: "Organization",
+      resourceId: organizationId,
+      expectedRevision: input.revision,
+      currentRevision: org.revision,
+    });
+
+    // Atomically update organization and increment revision in a transaction
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.organization.updateMany({
+        where: {
+          id: organizationId,
+          revision: org.revision, // Double-check that revision hasn't changed
+        },
+        data: {
+          ...(input.name && { name: input.name }),
+          ...(input.website !== undefined && { website: input.website || null }),
+          revision: OptimisticLockHelper.incrementRevision(org.revision),
+        },
+      });
+
+      // If no rows were updated, the revision check failed (concurrent write)
+      if (result.count === 0) {
+        const current = await tx.organization.findUnique({
+          where: { id: organizationId },
+        });
+        throw new ConflictException(
+          JSON.stringify({
+            code: "CONFLICT",
+            message: `Organization has been modified. Expected revision ${org.revision}, but current revision is ${current?.revision}. Please refresh and retry.`,
+            currentRevision: current?.revision,
+          }),
+        );
+      }
+
+      // Fetch the updated record
+      return tx.organization.findUnique({
+        where: { id: organizationId },
+      });
     });
 
     // Log audit event
@@ -186,6 +221,7 @@ export class OrganizationsService {
       slug: org.slug,
       website: org.website,
       status: org.status,
+      revision: org.revision,
       createdById: org.createdById,
       createdAt: org.createdAt,
       updatedAt: org.updatedAt,

@@ -659,3 +659,341 @@ describe("SessionService expiry boundary (deterministic clock)", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// SessionService.listSessions
+// ---------------------------------------------------------------------------
+
+describe("SessionService.listSessions", () => {
+  it("returns all sessions for a user with safe metadata (no tokens or full fingerprints)", async () => {
+    const now = new Date("2030-01-15T10:00:00.000Z");
+    const clock = new FixedClock(now.toISOString());
+    const prisma = makePrismaMock();
+    const svc = new SessionService(prisma as never, config, clock);
+
+    const sessions = [
+      {
+        id: "sess_1",
+        createdAt: new Date("2030-01-15T08:00:00.000Z"),
+        expiresAt: new Date("2030-01-15T20:00:00.000Z"),
+        lastUsedAt: new Date("2030-01-15T09:30:00.000Z"),
+        revokedAt: null,
+      },
+      {
+        id: "sess_2",
+        createdAt: new Date("2030-01-15T07:00:00.000Z"),
+        expiresAt: new Date("2030-01-15T19:00:00.000Z"),
+        lastUsedAt: null,
+        revokedAt: null,
+      },
+    ];
+    prisma.authSession.findMany.mockResolvedValue(sessions);
+
+    const result = await svc.listSessions("user_1", "sess_1");
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({
+      sessionId: "sess_1",
+      createdAt: new Date("2030-01-15T08:00:00.000Z"),
+      expiresAt: new Date("2030-01-15T20:00:00.000Z"),
+      lastUsedAt: new Date("2030-01-15T09:30:00.000Z"),
+      revokedAt: null,
+      isActive: true,
+      isCurrent: true,
+    });
+    expect(result[1]).toMatchObject({
+      sessionId: "sess_2",
+      isCurrent: false,
+      isActive: true,
+    });
+
+    // Verify that the query only selects safe fields
+    expect(prisma.authSession.findMany).toHaveBeenCalledWith({
+      where: { userId: "user_1" },
+      select: {
+        id: true,
+        createdAt: true,
+        expiresAt: true,
+        lastUsedAt: true,
+        revokedAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+  });
+
+  it("marks sessions as inactive if they are revoked", async () => {
+    const now = new Date("2030-01-15T10:00:00.000Z");
+    const clock = new FixedClock(now.toISOString());
+    const prisma = makePrismaMock();
+    const svc = new SessionService(prisma as never, config, clock);
+
+    const sessions = [
+      {
+        id: "sess_1",
+        createdAt: new Date("2030-01-15T08:00:00.000Z"),
+        expiresAt: new Date("2030-01-15T20:00:00.000Z"),
+        lastUsedAt: new Date("2030-01-15T09:30:00.000Z"),
+        revokedAt: new Date("2030-01-15T09:45:00.000Z"),
+      },
+    ];
+    prisma.authSession.findMany.mockResolvedValue(sessions);
+
+    const result = await svc.listSessions("user_1", "sess_1");
+
+    expect(result[0]).toMatchObject({
+      isActive: false,
+      revokedAt: new Date("2030-01-15T09:45:00.000Z"),
+    });
+  });
+
+  it("marks sessions as inactive if they have expired", async () => {
+    const now = new Date("2030-01-15T21:00:00.000Z");
+    const clock = new FixedClock(now.toISOString());
+    const prisma = makePrismaMock();
+    const svc = new SessionService(prisma as never, config, clock);
+
+    const sessions = [
+      {
+        id: "sess_1",
+        createdAt: new Date("2030-01-15T08:00:00.000Z"),
+        expiresAt: new Date("2030-01-15T20:00:00.000Z"),
+        lastUsedAt: new Date("2030-01-15T19:30:00.000Z"),
+        revokedAt: null,
+      },
+    ];
+    prisma.authSession.findMany.mockResolvedValue(sessions);
+
+    const result = await svc.listSessions("user_1", "sess_1");
+
+    expect(result[0]).toMatchObject({
+      isActive: false,
+      revokedAt: null,
+    });
+  });
+
+  it("returns sessions ordered by createdAt descending", async () => {
+    const prisma = makePrismaMock();
+    const svc = new SessionService(prisma as never, config);
+
+    await svc.listSessions("user_1", "sess_1");
+
+    expect(prisma.authSession.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: { createdAt: "desc" },
+      }),
+    );
+  });
+
+  it("handles a user with no sessions", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.findMany.mockResolvedValue([]);
+    const svc = new SessionService(prisma as never, config);
+
+    const result = await svc.listSessions("user_1", "sess_1");
+
+    expect(result).toEqual([]);
+  });
+
+  it("never exposes the raw token hash or tokenHash field", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.findMany.mockResolvedValue([
+      {
+        id: "sess_1",
+        createdAt: new Date(),
+        expiresAt: new Date(),
+        lastUsedAt: null,
+        revokedAt: null,
+      },
+    ]);
+    const svc = new SessionService(prisma as never, config);
+
+    const result = await svc.listSessions("user_1", "sess_1");
+
+    // The result must not include tokenHash
+    expect(result[0]).not.toHaveProperty("tokenHash");
+    expect(JSON.stringify(result[0])).not.toContain("tokenHash");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SessionService.revokeSpecificSession
+// ---------------------------------------------------------------------------
+
+describe("SessionService.revokeSpecificSession", () => {
+  it("revokes a session that belongs to the user", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.updateMany.mockResolvedValue({ count: 1 });
+    const svc = new SessionService(prisma as never, config);
+
+    const result = await svc.revokeSpecificSession("sess_1", "user_1");
+
+    expect(result).toBe(true);
+    expect(prisma.authSession.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "sess_1",
+        userId: "user_1",
+        revokedAt: null,
+      },
+      data: { revokedAt: expect.any(Date) },
+    });
+  });
+
+  it("returns false if session does not exist", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.updateMany.mockResolvedValue({ count: 0 });
+    const svc = new SessionService(prisma as never, config);
+
+    const result = await svc.revokeSpecificSession("sess_1", "user_1");
+
+    expect(result).toBe(false);
+  });
+
+  it("returns false if session does not belong to the user (cross-user protection)", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.updateMany.mockResolvedValue({ count: 0 });
+    const svc = new SessionService(prisma as never, config);
+
+    const result = await svc.revokeSpecificSession("sess_1", "wrong_user");
+
+    expect(result).toBe(false);
+    // Verify the query included the userId check
+    expect(prisma.authSession.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ userId: "wrong_user" }),
+      }),
+    );
+  });
+
+  it("is idempotent: revoking an already-revoked session returns false", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.updateMany.mockResolvedValue({ count: 0 });
+    const svc = new SessionService(prisma as never, config);
+
+    const result = await svc.revokeSpecificSession("sess_1", "user_1");
+
+    expect(result).toBe(false);
+    // The query should include the revokedAt: null guard
+    expect(prisma.authSession.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ revokedAt: null }),
+      }),
+    );
+  });
+
+  it("sets revokedAt to the current time", async () => {
+    const clock = new FixedClock("2030-01-15T10:00:00.000Z");
+    const prisma = makePrismaMock();
+    prisma.authSession.updateMany.mockResolvedValue({ count: 1 });
+    const svc = new SessionService(prisma as never, config, clock);
+
+    await svc.revokeSpecificSession("sess_1", "user_1");
+
+    expect(prisma.authSession.updateMany).toHaveBeenCalledWith({
+      where: { id: "sess_1", userId: "user_1", revokedAt: null },
+      data: { revokedAt: new Date("2030-01-15T10:00:00.000Z") },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SessionService.revokeAllOtherSessions
+// ---------------------------------------------------------------------------
+
+describe("SessionService.revokeAllOtherSessions", () => {
+  it("revokes all active sessions except the current one", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.updateMany.mockResolvedValue({ count: 3 });
+    const svc = new SessionService(prisma as never, config);
+
+    const count = await svc.revokeAllOtherSessions("user_1", "sess_current");
+
+    expect(count).toBe(3);
+    expect(prisma.authSession.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: "user_1",
+        id: { not: "sess_current" },
+        revokedAt: null,
+      },
+      data: { revokedAt: expect.any(Date) },
+    });
+  });
+
+  it("returns 0 if no other sessions exist", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.updateMany.mockResolvedValue({ count: 0 });
+    const svc = new SessionService(prisma as never, config);
+
+    const count = await svc.revokeAllOtherSessions("user_1", "sess_current");
+
+    expect(count).toBe(0);
+  });
+
+  it("never revokes the current session", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.updateMany.mockResolvedValue({ count: 2 });
+    const svc = new SessionService(prisma as never, config);
+
+    await svc.revokeAllOtherSessions("user_1", "sess_current");
+
+    // The query must use { not: "sess_current" } to exclude it
+    expect(prisma.authSession.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: { not: "sess_current" },
+        }),
+      }),
+    );
+  });
+
+  it("only revokes active (non-revoked, non-expired) sessions", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.updateMany.mockResolvedValue({ count: 2 });
+    const svc = new SessionService(prisma as never, config);
+
+    await svc.revokeAllOtherSessions("user_1", "sess_current");
+
+    // The query must filter by revokedAt: null to exclude already-revoked sessions
+    expect(prisma.authSession.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          revokedAt: null,
+        }),
+      }),
+    );
+  });
+
+  it("sets revokedAt to the current time for each revoked session", async () => {
+    const clock = new FixedClock("2030-01-15T10:00:00.000Z");
+    const prisma = makePrismaMock();
+    prisma.authSession.updateMany.mockResolvedValue({ count: 2 });
+    const svc = new SessionService(prisma as never, config, clock);
+
+    await svc.revokeAllOtherSessions("user_1", "sess_current");
+
+    expect(prisma.authSession.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: "user_1",
+        id: { not: "sess_current" },
+        revokedAt: null,
+      },
+      data: { revokedAt: new Date("2030-01-15T10:00:00.000Z") },
+    });
+  });
+
+  it("scopes revocation to the specified userId (no cross-user revocation)", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.updateMany.mockResolvedValue({ count: 0 });
+    const svc = new SessionService(prisma as never, config);
+
+    await svc.revokeAllOtherSessions("user_1", "sess_current");
+
+    // The query must include userId check
+    expect(prisma.authSession.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          userId: "user_1",
+        }),
+      }),
+    );
+  });
+});

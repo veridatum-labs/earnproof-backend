@@ -17,6 +17,12 @@ export class IssuerResponseDto {
   })
   status: ResourceStatus;
 
+  @ApiProperty({
+    description:
+      "Revision counter for optimistic concurrency control. Increment this value and include it in update requests to detect concurrent modifications.",
+  })
+  revision: number;
+
   @ApiPropertyOptional({
     description: "Hash of the public metadata for integrity verification",
     nullable: true,

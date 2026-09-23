@@ -170,6 +170,7 @@ model Organization {
   slug        String          @unique
   website     String?
   status      ResourceStatus  @default(PENDING)
+  revision    Int             @default(1)
   createdById String
   createdBy   User            @relation(fields: [createdById], references: [id])
   createdAt   DateTime        @default(now())
@@ -187,6 +188,7 @@ model Issuer {
   organization    Organization    @relation(fields: [organizationId], references: [id])
   stellarAddress  String          @unique
   status          ResourceStatus  @default(PENDING)
+  revision        Int             @default(1)
   metadataHash    String?
   publicMetadata  Json?
   contractSyncState       String          @default("PENDING")
@@ -253,6 +255,7 @@ model TrustedSource {
   issuerId      String?
   issuer        Issuer?         @relation(fields: [issuerId], references: [id])
   status        ResourceStatus  @default(ACTIVE)
+  revision      Int             @default(1)
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 
@@ -385,6 +388,7 @@ model Webhook {
   secretEncrypted  String
   events           Json
   status           ResourceStatus    @default(ACTIVE)
+  revision         Int               @default(1)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   deliveries       WebhookDelivery[]
