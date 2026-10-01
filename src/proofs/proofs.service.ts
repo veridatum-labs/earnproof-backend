@@ -18,6 +18,9 @@ import {
   Prisma,
   ProofStatus,
   ProofType,
+  QuarantineDecision,
+  RevocationActorType,
+  RevocationReasonCode,
   ResourceStatus,
   VerificationResult,
   VerificationOutcome,
@@ -27,6 +30,7 @@ import { VerificationEventService } from "../audit/verification-event.service";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { canonicalAssetId } from "../common/assets/asset-identifier";
 import { canonicalize } from "../common/crypto/canonicalize";
+import { CredentialSigningKeyringService } from "../common/crypto/credential-signing-keyring.service";
 import { CredentialVerificationKeyService } from "../common/crypto/credential-verification-key.service";
 import { sha256 } from "../common/crypto/hash";
 import { PaymentEncryptionKeyringService } from "../common/crypto/payment-encryption-keyring.service";
@@ -62,6 +66,7 @@ import {
   IntervalUnit,
 } from "./dto/create-recurring-income-proof.dto";
 import { ListProofsDto } from "./dto/list-proofs.dto";
+import { RevokeProofDto } from "./dto/revoke-proof.dto";
 import { RenewProofDto } from "./dto/renew-proof.dto";
 import {
   evaluateRenewalEligibility,
@@ -227,7 +232,7 @@ function isUniqueViolation(error: unknown): boolean {
 
 @Injectable()
 export class ProofsService {
-  private readonly signingSecret: string;
+  private readonly signingKeyring: CredentialSigningKeyringService;
   private readonly paymentEncryptionKeyring: PaymentEncryptionKeyringService;
   private readonly stellarNetwork: string;
   private readonly anchoringEnabled: boolean;
@@ -248,9 +253,7 @@ export class ProofsService {
     private readonly credentialVerificationKeyService?: CredentialVerificationKeyService,
     private readonly verificationAbuseService?: ProofVerificationAbuseService,
   ) {
-    this.signingSecret = configService.getOrThrow<string>(
-      "credentialSigningSecret",
-    );
+    this.signingKeyring = new CredentialSigningKeyringService(configService);
     this.paymentEncryptionKeyring = new PaymentEncryptionKeyringService(
       configService,
     );
@@ -1515,7 +1518,7 @@ export class ProofsService {
     };
   }
 
-  async revokeProof(userId: string, proofId: string) {
+  async revokeProof(user: AuthenticatedUser, proofId: string, body?: RevokeProofDto) {
     const proof = await this.prisma.proof.findUnique({
       where: {
         id: proofId,
@@ -1525,6 +1528,11 @@ export class ProofsService {
         userId: true,
         status: true,
         contractTransactionHash: true,
+        revokedAt: true,
+        revokedByType: true,
+        revocationReasonCode: true,
+        revocationReasonPrivate: true,
+        revocationEvidenceHash: true,
       },
     });
 
@@ -1532,22 +1540,71 @@ export class ProofsService {
       throw new NotFoundException("Proof not found");
     }
 
-    if (proof.userId !== userId) {
+    const isOwner = proof.userId === user.id;
+    const isAdmin = user.role === "ADMIN";
+
+    if (!isOwner && !isAdmin) {
       throw new ForbiddenException("Proof does not belong to this user");
     }
 
-    // Write local revocation + optional REVOKE anchoring intent atomically.
+    // Idempotent: a proof already revoked keeps its original actor, reason,
+    // and evidence. Re-issuing the same request must not let a second call
+    // (racing worker, retried client) overwrite that record.
+    if (proof.status === ProofStatus.REVOKED) {
+      return {
+        id: proof.id,
+        status: proof.status,
+        revokedAt: proof.revokedAt?.toISOString() ?? new Date().toISOString(),
+        revokedByType: proof.revokedByType ?? RevocationActorType.OWNER,
+        revocationReasonCode: proof.revocationReasonCode ?? RevocationReasonCode.OTHER,
+        revocationReasonPrivate: proof.revocationReasonPrivate ?? null,
+        revocationEvidenceHash: proof.revocationEvidenceHash ?? null,
+        anchoring: { anchored: false as const, reason: "disabled" as const },
+      };
+    }
+
+    const revokedByType = isAdmin && !isOwner ? RevocationActorType.ADMIN : RevocationActorType.OWNER;
+    const reasonCode = body?.reasonCode ?? RevocationReasonCode.OWNER_REQUESTED;
+    const revokedAt = new Date();
+
+    // Write local revocation, the audit record, and the optional REVOKE
+    // anchoring intent atomically: an untraceable revocation (state changed,
+    // no audit row) is worse than a failed one.
     const updated = await this.prisma.$transaction(async (tx) => {
       const result = await tx.proof.update({
         where: { id: proof.id },
         data: {
           status: ProofStatus.REVOKED,
-          revokedAt: new Date(),
+          revokedAt,
+          revokedByType,
+          revokedById: user.id,
+          revocationReasonCode: reasonCode,
+          revocationReasonPrivate: body?.reasonPrivate ?? null,
+          revocationEvidenceHash: body?.evidenceHash ?? null,
         },
         select: {
           id: true,
           status: true,
           revokedAt: true,
+          revokedByType: true,
+          revocationReasonCode: true,
+          revocationReasonPrivate: true,
+          revocationEvidenceHash: true,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorType: "user",
+          actorId: user.id,
+          action: "proof.revoked",
+          resourceType: "proof",
+          resourceId: proof.id,
+          metadata: {
+            revokedByType,
+            reasonCode,
+            revokedAt: revokedAt.toISOString(),
+          },
         },
       });
 
@@ -1571,6 +1628,10 @@ export class ProofsService {
         ? { anchored: false as const, reason: "pending" as const }
         : { anchored: false as const, reason: "disabled" as const };
 
+    this.emitWebhook(proof.userId, "proof.revoked", {
+      proofId: updated.id,
+      status: updated.status,
+      revokedAt: updated.revokedAt?.toISOString() ?? revokedAt.toISOString(),
     this.emitWebhook(userId, {
       event: "proof.revoked",
       source: {
@@ -1582,6 +1643,7 @@ export class ProofsService {
 
     return {
       ...updated,
+      revokedAt: updated.revokedAt?.toISOString() ?? revokedAt.toISOString(),
       anchoring: anchoringResult,
     };
   }
@@ -1807,6 +1869,7 @@ export class ProofsService {
         issuedAt: proof.createdAt.toISOString(),
         expiresAt: proof.expiresAt.toISOString(),
         revokedAt: proof.revokedAt?.toISOString() ?? null,
+        revocationReasonCode: proof.revocationReasonCode ?? null,
         contractStatus: contractStatus ?? {
           checked: false,
           reason: "disabled",
@@ -2437,8 +2500,12 @@ export class ProofsService {
       ...credential,
       proof: {
         type: "HMAC-SHA256",
+        keyId: this.signingKeyring.activeKeyId,
         credentialHash: `sha256:${sha256(canonicalPayload)}`,
-        signature: `hmac-sha256:${createHmac("sha256", this.signingSecret)
+        signature: `hmac-sha256:${createHmac(
+          "sha256",
+          this.signingKeyring.activeSecret,
+        )
           .update(canonicalPayload)
           .digest("base64url")}`,
       },
@@ -2650,6 +2717,10 @@ export class ProofsService {
       issuedAt: proof.createdAt.toISOString(),
       expiresAt: proof.expiresAt.toISOString(),
       revokedAt: proof.revokedAt?.toISOString() ?? null,
+      revokedByType: proof.revokedByType ?? null,
+      revocationReasonCode: proof.revocationReasonCode ?? null,
+      revocationReasonPrivate: proof.revocationReasonPrivate ?? null,
+      revocationEvidenceHash: proof.revocationEvidenceHash ?? null,
       anchoring: {
         anchored: Boolean(proof.contractTransactionHash),
         status: proof.contractTransactionHash ? "recorded" : "not_anchored",
@@ -2723,6 +2794,204 @@ export class ProofsService {
   }
 
   /**
+   * Proof-scoped anchoring status: the current AnchoringIntent state (at most
+   * one REGISTER and one REVOKE row, per the (proofId, operation) unique
+   * constraint). This is a live snapshot, not a per-attempt history — the
+   * schema keeps one mutable row per operation, overwritten on each attempt.
+   */
+  async getProofAnchoringStatus(user: AuthenticatedUser, proofId: string) {
+    const proof = await this.prisma.proof.findFirst({
+      where:
+        user.role === "ADMIN" ? { id: proofId } : { id: proofId, userId: user.id },
+      select: { id: true },
+    });
+
+    if (!proof) {
+      throw new NotFoundException("Proof not found");
+    }
+
+    const intents = await this.prisma.anchoringIntent.findMany({
+      where: { proofId: proof.id },
+      orderBy: { createdAt: "asc" },
+    });
+
+    return {
+      proofId: proof.id,
+      intents: intents.map((intent) => ({
+        id: intent.id,
+        operation: intent.operation,
+        status: intent.status,
+        attemptCount: intent.attemptCount,
+        lastAttemptAt: intent.lastAttemptAt?.toISOString() ?? null,
+        nextRetryAt: intent.nextRetryAt?.toISOString() ?? null,
+        lastErrorSafe: intent.lastErrorSafe,
+        permanentError: intent.permanentError,
+        transactionHash: intent.transactionHash,
+        quarantinedAt: intent.quarantinedAt?.toISOString() ?? null,
+        quarantineReasonCode: intent.quarantineReasonCode,
+        quarantineDecision: intent.quarantineDecision,
+        decidedAt: intent.decidedAt?.toISOString() ?? null,
+      })),
+    };
+  }
+
+  /**
+   * Redrive a quarantined anchoring intent: requeue it for the worker to
+   * retry.
+   *
+   * Deliberately does not invoke the CLI synchronously: the worker's poll
+   * loop already owns claiming (`FOR UPDATE SKIP LOCKED`) and backoff, so
+   * this only flips QUARANTINED -> PENDING with nextRetryAt = now and lets
+   * that machinery pick it up. attemptCount is preserved (not reset), so
+   * MAX_ATTEMPTS and the backoff curve still apply to a redriven intent.
+   * Recording `quarantineDecision: REDRIVEN` keeps the prior quarantine
+   * reason and timestamp on the row rather than clearing them, so the
+   * intent's prior-attempt and quarantine history survives the redrive.
+   */
+  async retryProofAnchoring(user: AuthenticatedUser, proofId: string, intentId: string) {
+    const proof = await this.prisma.proof.findFirst({
+      where:
+        user.role === "ADMIN" ? { id: proofId } : { id: proofId, userId: user.id },
+      select: { id: true },
+    });
+
+    if (!proof) {
+      throw new NotFoundException("Proof not found");
+    }
+
+    const intent = await this.prisma.anchoringIntent.findFirst({
+      where: { id: intentId, proofId: proof.id },
+    });
+
+    if (!intent) {
+      throw new NotFoundException("Anchoring intent not found for this proof");
+    }
+
+    // Processing or confirmed intents cannot be duplicated: only a
+    // quarantined intent is eligible for a manual redrive. A PENDING intent
+    // is already going to retry on its own schedule, and an ABANDONED
+    // decision is meant to be terminal.
+    if (
+      intent.status !== AnchoringStatus.QUARANTINED ||
+      intent.quarantineDecision === QuarantineDecision.ABANDONED
+    ) {
+      throw new UnprocessableEntityException(
+        `Anchoring intent ${intentId} is not eligible for retry (status: ${intent.status}, quarantineDecision: ${intent.quarantineDecision})`,
+      );
+    }
+
+    const requeuedAt = new Date();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.anchoringIntent.update({
+        where: { id: intentId },
+        data: {
+          status: AnchoringStatus.PENDING,
+          permanentError: false,
+          nextRetryAt: requeuedAt,
+          quarantineDecision: QuarantineDecision.REDRIVEN,
+          decidedById: user.id,
+          decidedAt: requeuedAt,
+        },
+        select: { id: true, status: true, attemptCount: true },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorType: "user",
+          actorId: user.id,
+          action: "anchoring_intent.retried",
+          resourceType: "proof",
+          resourceId: proof.id,
+          metadata: { intentId, requeuedAt: requeuedAt.toISOString() },
+        },
+      });
+
+      return result;
+    });
+
+    return {
+      intentId: updated.id,
+      status: updated.status,
+      attemptCount: updated.attemptCount,
+    };
+  }
+
+  /**
+   * Abandon a quarantined anchoring intent: a terminal operator decision
+   * that the worker will never retry and no further redrive is expected.
+   *
+   * Deliberately touches only the AnchoringIntent row. Abandoning a
+   * REGISTER intent must never be able to make an unanchored proof look
+   * confirmed: Proof.status and Proof.contractTransactionHash are untouched
+   * here, so a proof whose only REGISTER intent was abandoned stays exactly
+   * as unanchored as it was before the abandonment.
+   */
+  async abandonProofAnchoring(user: AuthenticatedUser, proofId: string, intentId: string) {
+    const proof = await this.prisma.proof.findFirst({
+      where:
+        user.role === "ADMIN" ? { id: proofId } : { id: proofId, userId: user.id },
+      select: { id: true },
+    });
+
+    if (!proof) {
+      throw new NotFoundException("Proof not found");
+    }
+
+    const intent = await this.prisma.anchoringIntent.findFirst({
+      where: { id: intentId, proofId: proof.id },
+    });
+
+    if (!intent) {
+      throw new NotFoundException("Anchoring intent not found for this proof");
+    }
+
+    if (intent.status !== AnchoringStatus.QUARANTINED) {
+      throw new UnprocessableEntityException(
+        `Anchoring intent ${intentId} is not eligible for abandonment (status: ${intent.status})`,
+      );
+    }
+
+    if (intent.quarantineDecision === QuarantineDecision.ABANDONED) {
+      // Idempotent: already abandoned, return the existing decision as-is
+      // rather than overwriting decidedById/decidedAt on a retry.
+      return {
+        intentId: intent.id,
+        status: intent.status,
+        quarantineDecision: intent.quarantineDecision,
+      };
+    }
+
+    const decidedAt = new Date();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.anchoringIntent.update({
+        where: { id: intentId },
+        data: {
+          quarantineDecision: QuarantineDecision.ABANDONED,
+          decidedById: user.id,
+          decidedAt,
+        },
+        select: { id: true, status: true, quarantineDecision: true },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorType: "user",
+          actorId: user.id,
+          action: "anchoring_intent.abandoned",
+          resourceType: "proof",
+          resourceId: proof.id,
+          metadata: { intentId, decidedAt: decidedAt.toISOString() },
+        },
+      });
+
+      return result;
+    });
+
+    return {
+      intentId: updated.id,
+      status: updated.status,
+      quarantineDecision: updated.quarantineDecision,
+    };
    * Validate that all active attestations for a subject wallet are still valid
    * (not expired, not revoked) for proof issuance.
    *

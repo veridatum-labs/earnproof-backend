@@ -8,6 +8,10 @@ import { ProofStatus } from "@prisma/client";
 import { createHmac } from "crypto";
 import { z } from "zod";
 import { canonicalize } from "../common/crypto/canonicalize";
+import {
+  CredentialSigningKeyringService,
+  versionFromKeyId,
+} from "../common/crypto/credential-signing-keyring.service";
 import { CredentialVerificationKeyService } from "../common/crypto/credential-verification-key.service";
 import { sha256 } from "../common/crypto/hash";
 import { safeEqual } from "../common/crypto/timing-safe";
@@ -76,6 +80,16 @@ const MinimumIncomeCredentialSchema = z.object({
   }).strict(),
   issuedAt: z.string().datetime({ offset: true }),
   expiresAt: z.string().datetime({ offset: true }),
+  // The signature proof block appended when a credential is issued.
+  // `keyId` is optional for backward compatibility: a credential issued
+  // before key rotation existed has no keyId and is treated as signed by
+  // key version 0.
+  proof: z.object({
+    type: z.literal("HMAC-SHA256"),
+    keyId: z.string().min(1).optional(),
+    credentialHash: z.string().min(1),
+    signature: z.string().min(1),
+  }).strict(),
   // The signature proof block appended when a credential is issued
   proof: z.union([
     z.object({
@@ -116,6 +130,8 @@ function objectDepth(value: unknown, current = 0): number {
 
 @Injectable()
 export class CredentialsService {
+  private readonly logger = new Logger(CredentialsService.name);
+  private readonly signingKeyring: CredentialSigningKeyringService;
   private readonly logger = new StructuredLogger(CredentialsService.name);
   private readonly signingSecret: string;
 
@@ -127,9 +143,7 @@ export class CredentialsService {
     @Optional()
     private readonly credentialVerificationKeyService?: CredentialVerificationKeyService,
   ) {
-    this.signingSecret = configService.getOrThrow<string>(
-      "credentialSigningSecret",
-    );
+    this.signingKeyring = new CredentialSigningKeyringService(configService);
   }
 
   /**
@@ -283,8 +297,32 @@ export class CredentialsService {
     }
 
     // ------------------------------------------------------------------
-    // 5. Signature check — recompute HMAC and compare timing-safely
+    // 5. Resolve the signing key by keyId (absent keyId => legacy version 0,
+    //    pre-dating key rotation), then verify it is still usable and
+    //    recompute the HMAC to compare timing-safely.
     // ------------------------------------------------------------------
+    const keyVersion = proof.keyId ? versionFromKeyId(proof.keyId) : 0;
+
+    if (keyVersion === null || !this.signingKeyring.isUsableForVerification(keyVersion)) {
+      this.logger.log({
+        event: "credential_verify",
+        result: "unsupported_key",
+        credentialHash,
+        keyId: proof.keyId ?? "(legacy, no keyId)",
+      });
+      return { result: "unsupported_key" };
+    }
+
+    const signingSecret = this.signingKeyring.secretFor(keyVersion);
+    if (!signingSecret) {
+      // isUsableForVerification already checked the key is loaded, so this
+      // only guards a race with a config reload; treat it the same way.
+      return { result: "unsupported_key" };
+    }
+
+    const expectedSignature = `hmac-sha256:${createHmac("sha256", signingSecret)
+      .update(canonicalPayload)
+      .digest("base64url")}`;
     const isEd25519Proof = proof.type === "Ed25519";
     const signatureValid = isEd25519Proof
       ? this.credentialVerificationKeyService?.hasKey(proof.keyId) === true &&

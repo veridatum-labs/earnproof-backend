@@ -50,6 +50,9 @@ and continues.
 | `issuer.address_rotated` | issuer | `audit_log` | user, system | success | `metadata.organizationId` | fail_closed |
 | `issuer.address_rotation_failed` | issuer | `audit_log` | user, system | success | `metadata.organizationId` | fail_closed |
 | `proof.verification_recorded` | proof | `verification_event_log` | system | success, denied | proof | fail_open |
+| `proof.revoked` | proof | `audit_log` | user | success | resource | fail_closed |
+| `anchoring_intent.retried` | proof | `audit_log` | user | success | resource | fail_closed |
+| `anchoring_intent.abandoned` | proof | `audit_log` | user | success | resource | fail_closed |
 | `api_key.created` | api_key | `audit_log` | user | success | `metadata.organizationId` | fail_closed |
 | `api_key.rotated` | api_key | `audit_log` | user | success | `metadata.organizationId` | fail_closed |
 | `api_key.revoked` | api_key | `audit_log` | user | success | `metadata.organizationId` | fail_closed |

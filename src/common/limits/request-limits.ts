@@ -150,6 +150,12 @@ export const FIELD_LIMITS = {
   metadataBytes: 8 * KB,
   metadataDepth: 5,
   /**
+   * A private, free-form revocation reason.
+   *
+   * Long enough for an operator note, short enough that it cannot be used to
+   * smuggle an unbounded document into an audit-log row.
+   */
+  revocationReason: 500,
    * Proof ids per batch verification request.
    *
    * A relying party reconciling a page of proofs verifies tens at a time, not

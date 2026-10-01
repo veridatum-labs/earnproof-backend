@@ -11,6 +11,7 @@ import { OrganizationLifecycleService } from "../../organizations/organization-l
 import { OrganizationsService } from "../../organizations/organizations.service";
 import { PaymentBackfillService } from "../../payments/payment-backfill.service";
 import { PaymentsService } from "../../payments/payments.service";
+import { ProofsService } from "../../proofs/proofs.service";
 import { TrustedSourcesService } from "../../trusted-sources/trusted-sources.service";
 import { UsersService } from "../../users/users.service";
 import { WebhooksService } from "../../webhooks/webhooks.service";
@@ -1002,6 +1003,164 @@ const scenarios: Scenario[] = [
         outcome,
       }),
   })),
+  {
+    event: "proof.revoked",
+    outcome: "success",
+    name: "revoking a proof",
+    run: (sink) => {
+      const prisma = {
+        proof: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: "proof_1",
+            userId: USER_ID,
+            status: "ACTIVE",
+            contractTransactionHash: null,
+            revokedAt: null,
+            revokedByType: null,
+            revocationReasonCode: null,
+            revocationReasonPrivate: null,
+            revocationEvidenceHash: null,
+          }),
+        },
+        $transaction: jest.fn(async (callback: (tx: unknown) => unknown) =>
+          callback({
+            proof: {
+              update: jest.fn().mockResolvedValue({
+                id: "proof_1",
+                status: "REVOKED",
+                revokedAt: new Date("2026-02-01T00:00:00.000Z"),
+                revokedByType: "OWNER",
+                revocationReasonCode: "OWNER_REQUESTED",
+                revocationReasonPrivate: null,
+                revocationEvidenceHash: null,
+              }),
+            },
+            auditLog: sink.auditLog,
+            anchoringIntent: { create: jest.fn() },
+          }),
+        ),
+      };
+
+      return new ProofsService(
+        prisma as never,
+        configDouble({
+          credentialSigningSecret: "matrix-signing-secret",
+          "stellar.network": "testnet",
+        }),
+        { recordEvent: jest.fn() } as never,
+      ).revokeProof(
+        {
+          id: USER_ID,
+          walletAddress: "GTEST",
+          walletHash: `sha256:${"b".repeat(64)}`,
+          role: "WORKER",
+        },
+        "proof_1",
+      );
+    },
+  },
+  {
+    event: "anchoring_intent.retried",
+    outcome: "success",
+    name: "retrying a quarantined anchoring intent",
+    run: (sink) => {
+      const prisma = {
+        proof: {
+          findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }),
+        },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "QUARANTINED",
+            permanentError: true,
+            attemptCount: 10,
+            quarantineDecision: "PENDING",
+          }),
+        },
+        $transaction: jest.fn(async (callback: (tx: unknown) => unknown) =>
+          callback({
+            anchoringIntent: {
+              update: jest.fn().mockResolvedValue({
+                id: "intent_1",
+                status: "PENDING",
+                attemptCount: 10,
+              }),
+            },
+            auditLog: sink.auditLog,
+          }),
+        ),
+      };
+
+      return new ProofsService(
+        prisma as never,
+        configDouble({
+          credentialSigningSecret: "matrix-signing-secret",
+          "stellar.network": "testnet",
+        }),
+        { recordEvent: jest.fn() } as never,
+      ).retryProofAnchoring(
+        {
+          id: USER_ID,
+          walletAddress: "GTEST",
+          walletHash: `sha256:${"c".repeat(64)}`,
+          role: "WORKER",
+        },
+        "proof_1",
+        "intent_1",
+      );
+    },
+  },
+  {
+    event: "anchoring_intent.abandoned",
+    outcome: "success",
+    name: "abandoning a quarantined anchoring intent",
+    run: (sink) => {
+      const prisma = {
+        proof: {
+          findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }),
+        },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "QUARANTINED",
+            quarantineDecision: "PENDING",
+          }),
+        },
+        $transaction: jest.fn(async (callback: (tx: unknown) => unknown) =>
+          callback({
+            anchoringIntent: {
+              update: jest.fn().mockResolvedValue({
+                id: "intent_1",
+                status: "QUARANTINED",
+                quarantineDecision: "ABANDONED",
+              }),
+            },
+            auditLog: sink.auditLog,
+          }),
+        ),
+      };
+
+      return new ProofsService(
+        prisma as never,
+        configDouble({
+          credentialSigningSecret: "matrix-signing-secret",
+          "stellar.network": "testnet",
+        }),
+        { recordEvent: jest.fn() } as never,
+      ).abandonProofAnchoring(
+        {
+          id: USER_ID,
+          walletAddress: "GTEST",
+          walletHash: `sha256:${"d".repeat(64)}`,
+          role: "WORKER",
+        },
+        "proof_1",
+        "intent_1",
+      );
+    },
+  },
 ];
 
 /** The record a scenario produced, normalised across the three stores. */

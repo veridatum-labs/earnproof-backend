@@ -32,6 +32,8 @@ import {
 import { Idempotent } from "../common/decorators/idempotent.decorator";
 import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { AuthGuard } from "../common/guards/auth.guard";
+import { AbandonAnchoringResponseDto } from "./dto/abandon-anchoring-response.dto";
+import { ProofAnchoringStatusResponseDto } from "./dto/anchoring-intent-status.dto";
 import { CreateInvoiceSettlementProofDto } from "./dto/create-invoice-settlement-proof.dto";
 import { CreateIncomeRangeProofDto } from "./dto/create-income-range-proof.dto";
 import { RequireApiKeyScopes } from "../common/guards/api-key-quota.guard";
@@ -52,6 +54,8 @@ import {
   ProofDetailResponseDto,
   ProofListResponseDto,
 } from "./dto/proof-history-response.dto";
+import { RetryAnchoringResponseDto } from "./dto/retry-anchoring-response.dto";
+import { RevokeProofDto } from "./dto/revoke-proof.dto";
 import {
   ProofRenewalResponseDto,
   RenewalEligibilityResponseDto,
@@ -430,9 +434,10 @@ export class ProofsController {
   @ApiOperation({
     summary: "Revoke a proof",
     description:
-      "Marks the proof as REVOKED and records a revocation timestamp. " +
+      "Marks the proof as REVOKED and records the revoking actor, reason, and revocation timestamp. " +
       "If the proof was anchored on-chain, a revocation transaction is also submitted. " +
-      "Only the owner of the proof may revoke it.",
+      "The owner of the proof or an administrator may revoke it. Idempotent: revoking an " +
+      "already-revoked proof returns its original revocation metadata unchanged.",
   })
   @ApiBearerAuth()
   @ApiParam({
@@ -452,7 +457,7 @@ export class ProofsController {
   })
   @ApiResponse({
     status: HttpStatus.FORBIDDEN,
-    description: "Proof does not belong to the authenticated user.",
+    description: "Proof does not belong to the authenticated user and they are not an administrator.",
     type: ApiErrorDto,
   })
   @ApiResponse({
@@ -462,6 +467,154 @@ export class ProofsController {
   })
   @UseGuards(AuthGuard)
   @Patch(":id/revoke")
+  revokeProof(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() body?: RevokeProofDto,
+  ) {
+    return this.proofsService.revokeProof(user, id, body);
+  }
+
+  @ApiOperation({
+    summary: "Get a proof's anchoring status",
+    description:
+      "Returns the current on-chain anchoring intent(s) for a proof (at most one REGISTER " +
+      "and one REVOKE). This is a live status snapshot, not a per-attempt history: the " +
+      "schema keeps one row per operation, overwritten on each attempt. Any failure detail " +
+      "returned is already redacted. Available to the proof's owner or an administrator.",
+  })
+  @ApiBearerAuth()
+  @ApiParam({
+    name: "id",
+    description: "Proof ID (uuid).",
+    example: "018e1234-abcd-7000-8000-abcdef012345",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "Anchoring status for the proof.",
+    type: ProofAnchoringStatusResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: "Proof not found, or does not belong to the authenticated user.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @UseGuards(AuthGuard)
+  @Get(":id/anchoring")
+  getProofAnchoringStatus(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+  ) {
+    return this.proofsService.getProofAnchoringStatus(user, id);
+  }
+
+  @ApiOperation({
+    summary: "Redrive a quarantined anchoring intent",
+    description:
+      "Requeues a QUARANTINED anchoring intent for the worker to retry on its next poll " +
+      "cycle. Does not invoke the chain synchronously. Only a quarantined intent without a " +
+      "prior ABANDONED decision is eligible; a PENDING intent is already scheduled to retry " +
+      "itself, and a PROCESSING or CONFIRMED intent cannot be retried. Available to the " +
+      "proof's owner or an administrator.",
+  })
+  @ApiBearerAuth()
+  @ApiParam({
+    name: "id",
+    description: "Proof ID (uuid).",
+    example: "018e1234-abcd-7000-8000-abcdef012345",
+  })
+  @ApiParam({
+    name: "intentId",
+    description: "Anchoring intent ID.",
+    example: "clx1abc2def3ghi4",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "The intent was requeued.",
+    type: RetryAnchoringResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description:
+      "Proof not found, does not belong to the authenticated user, or the intent does not " +
+      "belong to this proof.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    description: "The intent is not eligible for retry (not quarantined, or already abandoned).",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @UseGuards(AuthGuard)
+  @Post(":id/anchoring/:intentId/retry")
+  retryProofAnchoring(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Param("intentId") intentId: string,
+  ) {
+    return this.proofsService.retryProofAnchoring(user, id, intentId);
+  }
+
+  @ApiOperation({
+    summary: "Abandon a quarantined anchoring intent",
+    description:
+      "Records a terminal operator decision that a quarantined anchoring intent will never " +
+      "be retried again. Only touches the anchoring intent, never the proof's own status or " +
+      "on-chain transaction hash: abandoning a REGISTER intent cannot make an unanchored " +
+      "proof look confirmed. Idempotent: abandoning an already-abandoned intent returns its " +
+      "existing decision unchanged. Available to the proof's owner or an administrator.",
+  })
+  @ApiBearerAuth()
+  @ApiParam({
+    name: "id",
+    description: "Proof ID (uuid).",
+    example: "018e1234-abcd-7000-8000-abcdef012345",
+  })
+  @ApiParam({
+    name: "intentId",
+    description: "Anchoring intent ID.",
+    example: "clx1abc2def3ghi4",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "The intent was abandoned.",
+    type: AbandonAnchoringResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description:
+      "Proof not found, does not belong to the authenticated user, or the intent does not " +
+      "belong to this proof.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    description: "The intent is not eligible for abandonment (not quarantined).",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @UseGuards(AuthGuard)
+  @Post(":id/anchoring/:intentId/abandon")
+  abandonProofAnchoring(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Param("intentId") intentId: string,
+  ) {
+    return this.proofsService.abandonProofAnchoring(user, id, intentId);
   @AuthenticatedRoute({ ownership: "user" })
   revokeProof(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
     return this.proofsService.revokeProof(user.id, id);
