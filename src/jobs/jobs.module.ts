@@ -27,6 +27,8 @@ import { WebhookCertificateExpiryJob } from "./webhook-certificate-expiry.job";
 import { DomainEventOutboxWorkerService } from "./domain-event-outbox-worker.service";
 import { BulkAdminService } from "./bulk-admin/bulk-admin.service";
 import { BulkAdminController } from "./bulk-admin/bulk-admin.controller";
+import { MetricsModule } from "../metrics/metrics.module";
+import { MetricsRollupJob } from "./metrics-rollup.job";
 
 @Module({
   imports: [
@@ -37,6 +39,7 @@ import { BulkAdminController } from "./bulk-admin/bulk-admin.controller";
     DisclosureModule,
     WebhooksModule,
     ApiKeysModule,
+    MetricsModule,
   ],
   controllers: [JobExecutionController, BulkAdminController],
   providers: [
@@ -59,6 +62,7 @@ import { BulkAdminController } from "./bulk-admin/bulk-admin.controller";
     JobExecutionMaintenanceJob,
     AttestationReconcilerService,
     BulkAdminService,
+    MetricsRollupJob,
   ],
   exports: [
     AnchoringWorkerService,

@@ -317,6 +317,8 @@ model User {
   proofExpirationReminderPreference ProofExpirationReminderPreference?
   proofExpirationReminderDeliveries ProofExpirationReminderDelivery[]
   sessionRiskEvents       SessionRiskEvent[]
+  paymentAccountRotations PaymentAccountRotation[]
+  paymentMonitoredAccounts PaymentMonitoredAccount[]
 
   @@index([walletHash])
   @@index([status])
@@ -448,6 +450,7 @@ model Organization {
   domainEventsOutbox       DomainEventOutbox[]
   bulkAdminJobs        BulkAdminJob[]
   securityNotifications SecurityNotification[]
+  credentialVerificationKeyTrustPins CredentialVerificationKeyTrustPin[]
 
   @@index([status])
   @@index([archivedAt])
@@ -545,6 +548,7 @@ model Issuer {
   policyCommitments       IssuerPolicyCommitment[]
   invoiceSettlements      ProofInvoiceSettlement[]
   signingKeys             IssuerSigningKey[]
+  credentialVerificationKeyTrustPins CredentialVerificationKeyTrustPin[]
 
   @@index([organizationId])
   @@index([status])
@@ -868,6 +872,7 @@ model Proof {
   disclosureReceipts      DisclosureReceipt[]
   disputes                ProofDispute[]
   expirationReminderDeliveries ProofExpirationReminderDelivery[]
+  verificationProvenances      VerificationProvenance[]
 
   @@index([userId, status])
   @@index([userId, createdAt, id])
@@ -1069,6 +1074,7 @@ model VerificationProvenance {
   /// Timestamp when decision was made
   decidedAt     DateTime  @default(now())
   createdAt     DateTime  @default(now())
+  verificationProvenanceSources VerificationProvenanceSource[]
 
   @@unique([proofId, decidedAt])
   @@index([proofId, createdAt])
@@ -2194,6 +2200,8 @@ model PaymentBackfillJob {
   endLedger         Int
   status            PaymentBackfillStatus @default(PENDING)
   checkpointCursor  String?
+  /// Account to scan (#321). NULL for legacy jobs, which scan the user's wallet.
+  accountId         String?               @db.VarChar(56)
   pagesProcessed    Int                   @default(0)
   recordsSeen       Int                   @default(0)
   paymentsCreated   Int                   @default(0)
@@ -2490,6 +2498,8 @@ model ProofExpirationReminderDelivery {
   @@unique([proofId, windowHours])
   @@index([status, scheduledFor])
   @@index([userId, status])
+}
+
 enum TransactionConfirmationStatus {
   SUBMITTED
   PENDING
@@ -2838,4 +2848,257 @@ model ContractVersion {
   @@unique([network, contractId, schemaVersion])
   @@index([network, contractId, isCurrent])
   @@index([network, isCurrent])
+}
+
+// ---------------------------------------------------------------------------
+// Operational metric downsampling with retention tiers (#330)
+// See docs/metrics-rollups.md. Rows carry metric names from the SLI catalog,
+// bounded label sets and numbers only: never a payload or an identifier.
+// ---------------------------------------------------------------------------
+
+enum OperationalMetricTier {
+  MINUTE
+  HOUR
+  DAY
+}
+
+enum OperationalMetricKind {
+  COUNTER
+  HISTOGRAM
+}
+
+/// One per-series delta captured from a process's metrics registry. Short-lived:
+/// deleted once its minute is rolled up and past raw retention.
+model OperationalMetricContribution {
+  id           String                @id @default(cuid())
+  /// Random per-process identity. Never a hostname, user or tenant.
+  sourceId     String                @db.VarChar(64)
+  captureSeq   Int
+  metric       String                @db.VarChar(64)
+  kind         OperationalMetricKind
+  /// Canonical "name=value,..." over the bounded label vocabulary.
+  seriesKey    String                @db.VarChar(512)
+  bucketStart  DateTime
+  sum          Float
+  count        Int?
+  bucketCounts Json?
+  capturedAt   DateTime
+  createdAt    DateTime              @default(now())
+
+  /// Idempotency key: a retried capture can never be counted twice.
+  @@unique([sourceId, captureSeq, metric, seriesKey])
+  @@index([bucketStart])
+}
+
+/// Minute, hour or day aggregate. Written with set semantics from sealed inputs.
+model OperationalMetricRollup {
+  id           String                @id @default(cuid())
+  tier         OperationalMetricTier
+  metric       String                @db.VarChar(64)
+  kind         OperationalMetricKind
+  seriesKey    String                @db.VarChar(512)
+  bucketStart  DateTime
+  sum          Float
+  count        Int?
+  bucketCounts Json?
+  /// Inputs folded in (contributions, or lower-tier buckets weighted by theirs).
+  sampleCount  Int
+  computedAt   DateTime
+
+  @@unique([tier, metric, seriesKey, bucketStart])
+  @@index([tier, bucketStart])
+}
+
+/// Exclusive end of the newest bucket rolled up per tier. Only ever moves forward.
+model OperationalMetricWatermark {
+  tier          OperationalMetricTier @id
+  rolledThrough DateTime
+  updatedAt     DateTime              @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Configuration rollout snapshots and canaries (#329)
+// See docs/config-rollouts.md. Snapshots are append-only and never contain
+// secret values; excluded paths are recorded by name and reason only.
+// ---------------------------------------------------------------------------
+
+enum ConfigSnapshotOrigin {
+  CAPTURED
+  IMPORTED
+}
+
+/// Immutable, signed snapshot of one environment's effective configuration.
+model ConfigSnapshot {
+  id             String               @id @default(cuid())
+  environment    String               @db.VarChar(32)
+  origin         ConfigSnapshotOrigin
+  schemaVersion  String               @db.VarChar(64)
+  /// sha256 over environment, entries and exclusions (not the capture time).
+  contentHash    String               @db.VarChar(80)
+  capturedAt     DateTime
+  entries        Json
+  excluded       Json
+  signatureAlg   String               @db.VarChar(32)
+  signatureKeyId String               @db.VarChar(64)
+  signature      String               @db.VarChar(128)
+  createdById    String?
+  createdAt      DateTime             @default(now())
+  rollouts         ConfigRollout[]    @relation("RolloutSnapshot")
+  baselineRollouts ConfigRollout[]    @relation("RolloutBaseline")
+
+  @@unique([environment, contentHash])
+  @@index([environment, capturedAt])
+}
+
+enum ConfigRolloutStatus {
+  CANARY
+  BLOCKED
+  COMPLETED
+  ROLLED_BACK
+}
+
+/// A staged rollout of a snapshot into an environment, gated per stage.
+model ConfigRollout {
+  id                  String              @id
+  environment         String              @db.VarChar(32)
+  snapshotId          String
+  snapshot            ConfigSnapshot      @relation("RolloutSnapshot", fields: [snapshotId], references: [id])
+  baselineSnapshotId  String?
+  baselineSnapshot    ConfigSnapshot?     @relation("RolloutBaseline", fields: [baselineSnapshotId], references: [id])
+  status              ConfigRolloutStatus @default(CANARY)
+  stages              Int[]
+  stageIndex          Int                 @default(0)
+  stageStartedAt      DateTime
+  lastGateEventId     String?
+  lastGatePassed      Boolean?
+  lastGateEvaluatedAt DateTime?
+  /// Equals `environment` while the rollout is open, NULL otherwise: at most
+  /// one open rollout per environment, enforced by the unique index.
+  openEnvironmentKey  String?             @unique @db.VarChar(32)
+  /// Optimistic concurrency guard: every transition must match the version it read.
+  version             Int                 @default(0)
+  createdById         String
+  completedAt         DateTime?
+  rolledBackAt        DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  events              ConfigRolloutEvent[]
+
+  @@index([environment, status])
+}
+
+enum ConfigRolloutEventType {
+  CREATED
+  GATE_PASSED
+  GATE_FAILED
+  PROMOTED
+  COMPLETED
+  ROLLED_BACK
+}
+
+/// Append-only decision record: gate evidence, promotions, rollbacks.
+model ConfigRolloutEvent {
+  id         String                 @id
+  rolloutId  String
+  rollout    ConfigRollout          @relation(fields: [rolloutId], references: [id], onDelete: Cascade)
+  type       ConfigRolloutEventType
+  stageIndex Int
+  percent    Int
+  actorId    String
+  /// Codes, ids, numbers and timestamps only. Never configuration values.
+  evidence   Json
+  createdAt  DateTime
+
+  @@index([rolloutId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Payment account rotation and checkpoint handoff (#321)
+// See docs/payment-account-rotation.md. Public account ids only: no secret
+// key, seed or signature is ever stored.
+// ---------------------------------------------------------------------------
+
+enum PaymentAccountRotationStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  ACTIVATED
+  ROLLED_BACK
+  CANCELLED
+  EXPIRED
+  FAILED
+}
+
+/// A request to change the Stellar account whose payments are indexed for a user.
+model PaymentAccountRotation {
+  id                   String                       @id
+  userId               String
+  user                 User                         @relation(fields: [userId], references: [id])
+  /// Network name and passphrase the challenge was bound to.
+  network              String                       @db.VarChar(32)
+  networkPassphrase    String                       @db.VarChar(128)
+  fromAccountId        String                       @db.VarChar(56)
+  toAccountId          String                       @db.VarChar(56)
+  status               PaymentAccountRotationStatus @default(PENDING_VERIFICATION)
+  challengeMessage     String
+  nonceHash            String                       @db.VarChar(64)
+  expiresAt            DateTime
+  consumedAt           DateTime?
+  verifiedAt           DateTime?
+  /// Requested lower bound for backfilling the new account's prior history.
+  backfillFromLedger   Int?
+  /// Final verified checkpoint of the old account, captured at activation.
+  finalPagingToken     String?
+  finalOperationId     String?
+  finalTransactionHash String?
+  finalLedgerSequence  Int?
+  finalLedgerHash      String?
+  finalVerifiedAt      DateTime?
+  /// Backfill plan for the new account: inclusive ledger range, or NULL for none.
+  backfillStartLedger  Int?
+  backfillEndLedger    Int?
+  backfillJobId        String?
+  fromEpochId          String?
+  toEpochId            String?
+  activatedAt          DateTime?
+  rollbackDeadline     DateTime?
+  rolledBackAt         DateTime?
+  /// Bounded code, never free text.
+  rollbackReason       String?                      @db.VarChar(64)
+  /// Bounded code, never a signature, address or raw error.
+  failureReason        String?                      @db.VarChar(64)
+  /// Equals userId while the rotation is open: at most one open rotation per user.
+  openUserKey          String?                      @unique
+  /// Optimistic concurrency guard for activation, cancellation and rollback.
+  version              Int                          @default(0)
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+enum PaymentMonitoredAccountStatus {
+  ACTIVE
+  RETIRED
+}
+
+/// One epoch of a user's monitored payment account on one network. Absent for
+/// users who never rotated: their wallet address is the monitored account.
+model PaymentMonitoredAccount {
+  id                    String                        @id
+  userId                String
+  user                  User                          @relation(fields: [userId], references: [id])
+  network               String                        @db.VarChar(32)
+  accountId             String                        @db.VarChar(56)
+  status                PaymentMonitoredAccountStatus
+  activatedAt           DateTime
+  retiredAt             DateTime?
+  rotationId            String?
+  /// "<userId>:<network>" while ACTIVE: one active account per user and network.
+  activeUserKey         String?                       @unique
+  /// "<network>:<accountId>" while ACTIVE: an account is monitored for one user.
+  activeAccountKey      String?                       @unique
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
+
+  @@index([userId, network, activatedAt])
 }
