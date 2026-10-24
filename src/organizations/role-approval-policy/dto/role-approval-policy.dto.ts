@@ -79,6 +79,14 @@ export class RoleApprovalPolicyRulesDto {
   ownerChangesRequireOwnerApproval!: boolean;
 
   @ApiPropertyOptional({
+    description: "When true, approvals require a recent-auth assertion token.",
+    example: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  requireRecentAuth?: boolean;
+
+  @ApiPropertyOptional({
     description:
       "Platform invariant. Accepted only as `true`; `false` is reported as a violation.",
     example: true,
@@ -208,6 +216,9 @@ export class RoleApprovalPolicyResponseDto {
 
   @ApiProperty()
   ownerChangesRequireOwnerApproval!: boolean;
+
+  @ApiProperty({ description: "When true, approvals require a recent-auth assertion token." })
+  requireRecentAuth!: boolean;
 
   @ApiProperty({ type: SeparationOfDutiesDto })
   separationOfDuties!: SeparationOfDutiesDto;

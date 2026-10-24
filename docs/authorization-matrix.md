@@ -32,6 +32,10 @@ user or organization is answered as `404`, identical to an absent resource.
 | `GET /organizations/:id/role-approval-policy`, `GET .../history` | bearer ACTIVE member or ADMIN | path organization | 401/403/404 |
 | `POST /organizations/:id/role-approval-policy/preview` | bearer organization ADMIN/OWNER or ADMIN | path organization | 400/401/403/404 |
 | `PUT /organizations/:id/role-approval-policy` | bearer organization OWNER or ADMIN | path organization; `expectedVersion` must be active | 400/401/403/404/409 |
+| `POST /organizations/:id/role-change-requests`, `GET .../role-change-requests`, `GET .../role-change-requests/:requestId` | bearer ACTIVE member or ADMIN | path organization; create requires ADMIN or OWNER; cross-org yields 404 | 400/401/403/404/409 |
+| `POST /organizations/:id/role-change-requests/:requestId/approve` | bearer eligible approver (OWNER/ADMIN per policy) | path organization; self-approval and target-approval prohibited; requires `X-Recent-Auth` if configured; stale member revision yields 409 | 400/401/403/404/409 |
+| `POST /organizations/:id/role-change-requests/:requestId/reject` | bearer eligible approver (OWNER/ADMIN per policy) | path organization | 400/401/403/404/409 |
+| `POST /organizations/:id/role-change-requests/:requestId/cancel` | bearer requester, org OWNER, or platform ADMIN | path organization | 400/401/403/404/409 |
 | `GET /organizations/:id/webhooks/tls-posture`, `GET .../:webhookId/tls-posture` | bearer ACTIVE member or ADMIN | webhook in path organization, else 404 | 401/403/404 |
 | `POST /organizations/:id/webhooks/:webhookId/tls-posture/probe` | bearer organization ADMIN/OWNER or ADMIN | webhook in path organization, else 404; 60 s cooldown | 401/403/404/409/429 |
 | `GET/POST /admin/audit-legal-holds*` | bearer `ADMIN` | global admin; every decision needs a second administrator | 400/401/403/404/409 |

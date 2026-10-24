@@ -17,6 +17,7 @@ authorization and concurrency.
 | `requiredApprovals` | Distinct approvals needed | 1 to 5 inclusive |
 | `approvalExpiryMinutes` | How long a request stays open | 15 to 10080 (7 days) inclusive |
 | `ownerChangesRequireOwnerApproval` | A change touching `OWNER` needs an `OWNER` approver | If `true`, `approverRoles` must include `OWNER` |
+| `requireRecentAuth` | Requires `X-Recent-Auth` assertion on approval | Defaults to `true` |
 
 Separation of duties is not configurable. Every policy reports:
 
@@ -87,6 +88,14 @@ version numbers and the names of changed fields.
 
 ## Scope
 
-This change stores and serves the policy. Enforcing it on individual role
-changes (collecting approvals per change) is a separate piece of work.
-`POST /preview` with `sampleChange` shows what the policy would require.
+This policy is enforced on high-impact organization role changes via the dual-control
+approval workflow implemented in `src/organizations/role-change-requests/` (#278):
+
+- `POST /organizations/:organizationId/role-change-requests`: create a role change request.
+- `GET /organizations/:organizationId/role-change-requests`: list requests with filtering.
+- `GET /organizations/:organizationId/role-change-requests/:requestId`: get request details.
+- `POST /organizations/:organizationId/role-change-requests/:requestId/approve`: approve request (requires `X-Recent-Auth` header when `requireRecentAuth` is enabled; self-approval prohibited; rejects stale member revisions).
+- `POST /organizations/:organizationId/role-change-requests/:requestId/reject`: reject request with reason.
+- `POST /organizations/:organizationId/role-change-requests/:requestId/cancel`: cancel pending request.
+
+`POST /preview` with `sampleChange` evaluates how the policy will govern a hypothetical role transition.

@@ -59,4 +59,10 @@ export class OrganizationMemberResponseDto {
     example: "2026-09-25T12:34:56.789Z",
   })
   updatedAt: Date;
+
+  @ApiProperty({
+    description: "Optimistic concurrency revision of the membership record",
+    example: 0,
+  })
+  revision?: number;
 }

@@ -18,9 +18,8 @@ import { OrganizationsController } from "./organizations.controller";
 import { OrganizationsService } from "./organizations.service";
 import { RoleApprovalPolicyController } from "./role-approval-policy/role-approval-policy.controller";
 import { RoleApprovalPolicyService } from "./role-approval-policy/role-approval-policy.service";
-import { OrganizationInvitationsController } from "./organization-invitations.controller";
-import { InvitationsController } from "./invitations.controller";
-import { OrganizationInvitationsService } from "./organization-invitations.service";
+import { RoleChangeRequestsController } from "./role-change-requests/role-change-requests.controller";
+import { RoleChangeRequestsService } from "./role-change-requests/role-change-requests.service";
 
 @Module({
   imports: [DatabaseModule, AuthModule, JobsModule, QuotasModule],
@@ -30,8 +29,7 @@ import { OrganizationInvitationsService } from "./organization-invitations.servi
     MembershipImportController,
     AccessReviewController,
     RoleApprovalPolicyController,
-    OrganizationInvitationsController,
-    InvitationsController,
+    RoleChangeRequestsController,
   ],
   providers: [
     OrganizationsService,
@@ -42,7 +40,7 @@ import { OrganizationInvitationsService } from "./organization-invitations.servi
     MembershipImportService,
     AccessReviewService,
     RoleApprovalPolicyService,
-    OrganizationInvitationsService,
+    RoleChangeRequestsService,
     { provide: Clock, useClass: SystemClock },
   ],
   exports: [
@@ -54,7 +52,7 @@ import { OrganizationInvitationsService } from "./organization-invitations.servi
     MembershipImportService,
     AccessReviewService,
     RoleApprovalPolicyService,
-    OrganizationInvitationsService,
+    RoleChangeRequestsService,
   ],
 })
 export class OrganizationsModule {}

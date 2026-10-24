@@ -209,6 +209,7 @@ export class RoleApprovalPolicyService {
             requiredApprovals: proposed.requiredApprovals,
             approvalExpiryMinutes: proposed.approvalExpiryMinutes,
             ownerChangesRequireOwnerApproval: proposed.ownerChangesRequireOwnerApproval,
+            requireRecentAuth: proposed.requireRecentAuth ?? true,
             supersedesId: active?.id ?? null,
             createdById: user.id,
           },
@@ -328,6 +329,7 @@ function rulesFromRow(row: OrganizationRoleApprovalPolicy): RoleApprovalPolicyRu
     requiredApprovals: row.requiredApprovals,
     approvalExpiryMinutes: row.approvalExpiryMinutes,
     ownerChangesRequireOwnerApproval: row.ownerChangesRequireOwnerApproval,
+    requireRecentAuth: (row as any).requireRecentAuth ?? true,
   };
 }
 
