@@ -353,10 +353,13 @@ model User {
   declarationsApproved    PurposeDeclaration[]  @relation("declaration_approvedBy")
   declarationsRevoked     PurposeDeclaration[]  @relation("declaration_revokedBy")
   auditEntries            DeclarationAuditEntry[]
-  sentInvitations         OrganizationInvitation[] @relation("organizationInvitationsSent")
-  acceptedInvitations     OrganizationInvitation[] @relation("organizationInvitationsAccepted")
-  declinedInvitations     OrganizationInvitation[] @relation("organizationInvitationsDeclined")
-  revokedInvitations      OrganizationInvitation[] @relation("organizationInvitationsRevoked")
+  roleChangeRequestsCreated OrganizationRoleChangeRequest[] @relation("role_change_requester")
+  roleChangeRequestsTarget  OrganizationRoleChangeRequest[] @relation("role_change_target_user")
+  roleChangeApprovals       OrganizationRoleChangeApproval[] @relation("role_change_approver")
+  sentInvitations           OrganizationInvitation[] @relation("organizationInvitationsSent")
+  acceptedInvitations       OrganizationInvitation[] @relation("organizationInvitationsAccepted")
+  declinedInvitations       OrganizationInvitation[] @relation("organizationInvitationsDeclined")
+  revokedInvitations        OrganizationInvitation[] @relation("organizationInvitationsRevoked")
 
   @@index([walletHash])
   @@index([status])
@@ -504,6 +507,7 @@ model Organization {
   invitationDeliveryQuota          InvitationDeliveryQuota?
   invitationDeliveryOverrides      InvitationDeliveryOverride[]
   invitationDeliveryAuditEvents    InvitationDeliveryAuditEvent[]
+  roleChangeRequests               OrganizationRoleChangeRequest[]
   apiKeyRotations                  ApiKeyRotation[]
   apiKeyCutoverReceipts            ApiKeyCutoverReceipt[]
   invitations                      OrganizationInvitation[]
@@ -520,10 +524,12 @@ model OrganizationMember {
   user                User                   @relation("organizationMemberships", fields: [userId], references: [id], onDelete: Restrict)
   role                OrganizationMemberRole
   status              ResourceStatus         @default(ACTIVE)
+  revision            Int                    @default(0)
   joinedAt            DateTime?
   createdAt           DateTime               @default(now())
   updatedAt           DateTime               @updatedAt
   accessReviewEntries AccessReviewEntry[]
+  roleChangeRequests  OrganizationRoleChangeRequest[]
 
   @@unique([organizationId, userId])
   @@index([organizationId])
@@ -3067,6 +3073,9 @@ enum SecurityNotificationType {
   CIRCUIT_BREAKER_TRIPPED
   DISPUTE_FILED
   SYSTEM_SECURITY_ALERT
+  ROLE_CHANGE_REQUESTED
+  ROLE_CHANGE_APPROVED
+  ROLE_CHANGE_REJECTED
 }
 
 enum SecurityNotificationSeverity {
@@ -3517,12 +3526,70 @@ model OrganizationRoleApprovalPolicy {
   approvalExpiryMinutes            Int
   /// When true, a change that grants or removes OWNER needs an OWNER approver.
   ownerChangesRequireOwnerApproval Boolean
+  requireRecentAuth                Boolean                  @default(true)
   supersedesId                     String?                  @unique
   createdById                      String
   createdAt                        DateTime                 @default(now())
 
   @@unique([organizationId, version])
   @@index([organizationId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Organization role change requests (#278)
+// ---------------------------------------------------------------------------
+
+enum RoleChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+model OrganizationRoleChangeRequest {
+  id                     String                          @id @default(cuid())
+  organizationId         String
+  organization           Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  requesterId            String
+  requester              User                            @relation("role_change_requester", fields: [requesterId], references: [id])
+  targetUserId           String
+  targetUser             User                            @relation("role_change_target_user", fields: [targetUserId], references: [id])
+  targetMemberId         String
+  targetMember           OrganizationMember              @relation(fields: [targetMemberId], references: [id], onDelete: Cascade)
+  oldRole                OrganizationMemberRole
+  proposedRole           OrganizationMemberRole
+  justification          String                          @db.VarChar(512)
+  status                 RoleChangeRequestStatus         @default(PENDING)
+  expectedMemberRevision Int                             @default(0)
+  policyVersion          Int
+  requiredApprovals      Int                             @default(1)
+  expiresAt              DateTime
+  decidedById            String?
+  decidedAt              DateTime?
+  decisionReason         String?                         @db.VarChar(512)
+  appliedAt              DateTime?
+  createdAt              DateTime                        @default(now())
+  updatedAt              DateTime                        @updatedAt
+  approvals              OrganizationRoleChangeApproval[]
+
+  @@index([organizationId, status])
+  @@index([targetMemberId, status])
+  @@index([requesterId])
+  @@index([expiresAt])
+}
+
+model OrganizationRoleChangeApproval {
+  id         String                        @id @default(cuid())
+  requestId  String
+  request    OrganizationRoleChangeRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  approverId String
+  approver   User                          @relation("role_change_approver", fields: [approverId], references: [id])
+  reason     String?                       @db.VarChar(512)
+  createdAt  DateTime                      @default(now())
+
+  @@unique([requestId, approverId])
+  @@index([requestId])
 }
 
 // ---------------------------------------------------------------------------

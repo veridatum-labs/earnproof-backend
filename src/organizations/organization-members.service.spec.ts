@@ -266,6 +266,107 @@ describe("OrganizationMembersService", () => {
 
       expect(prisma.authSession.update).toHaveBeenCalled();
     });
+
+    it("should reject direct role change touching protected role when dual-control policy is active", async () => {
+      const memberId = "member-1";
+      const input = { role: "ADMIN" as OrganizationMemberRole };
+      const existingMember = {
+        id: memberId,
+        organizationId: mockOrgId,
+        userId: mockTargetUserId,
+        role: "MEMBER",
+        user: { walletAddress: "GXXXXXX3" },
+      };
+
+      const mockPolicyService = {
+        getActive: jest.fn().mockResolvedValue({
+          protectedRoles: ["OWNER", "ADMIN"],
+          approverRoles: ["OWNER", "ADMIN"],
+          requiredApprovals: 1,
+          approvalExpiryMinutes: 1440,
+          ownerChangesRequireOwnerApproval: true,
+          requireRecentAuth: true,
+        }),
+      };
+
+      const serviceWithPolicy = new OrganizationMembersService(
+        prisma,
+        sessions,
+        mockPolicyService as any,
+      );
+
+      jest
+        .spyOn(serviceWithPolicy as any, "ensureIsOrganizationOwner")
+        .mockResolvedValue(undefined);
+      jest
+        .spyOn(prisma.organizationMember, "findUnique")
+        .mockResolvedValue(existingMember as any);
+
+      await expect(
+        serviceWithPolicy.updateMemberRole(mockAdmin, mockOrgId, memberId, input),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it("should allow direct role change between unprotected roles and increment revision", async () => {
+      const memberId = "member-1";
+      const input = { role: "VIEWER" as OrganizationMemberRole };
+      const existingMember = {
+        id: memberId,
+        organizationId: mockOrgId,
+        userId: mockTargetUserId,
+        role: "MEMBER",
+        revision: 0,
+        user: { walletAddress: "GXXXXXX3" },
+      };
+      const updatedMember = {
+        ...existingMember,
+        role: "VIEWER",
+        revision: 1,
+        updatedAt: new Date(),
+      };
+
+      const mockPolicyService = {
+        getActive: jest.fn().mockResolvedValue({
+          protectedRoles: ["OWNER", "ADMIN"],
+          approverRoles: ["OWNER", "ADMIN"],
+          requiredApprovals: 1,
+          approvalExpiryMinutes: 1440,
+          ownerChangesRequireOwnerApproval: true,
+          requireRecentAuth: true,
+        }),
+      };
+
+      const serviceWithPolicy = new OrganizationMembersService(
+        prisma,
+        sessions,
+        mockPolicyService as any,
+      );
+
+      jest
+        .spyOn(serviceWithPolicy as any, "ensureIsOrganizationOwner")
+        .mockResolvedValue(undefined);
+      jest
+        .spyOn(prisma.organizationMember, "findUnique")
+        .mockResolvedValue(existingMember as any);
+      jest
+        .spyOn(prisma.organizationMember, "update")
+        .mockResolvedValue(updatedMember as any);
+      jest
+        .spyOn(prisma.authSession, "findMany")
+        .mockResolvedValue([]);
+      jest
+        .spyOn(prisma.auditLog, "create")
+        .mockResolvedValue({} as any);
+
+      const result = await serviceWithPolicy.updateMemberRole(mockAdmin, mockOrgId, memberId, input);
+      expect(result.role).toBe("VIEWER");
+      expect(result.revision).toBe(1);
+      expect(prisma.organizationMember.update).toHaveBeenCalledWith({
+        where: { id: memberId },
+        data: { role: "VIEWER", revision: { increment: 1 } },
+        include: { user: true },
+      });
+    });
   });
 
   describe("removeMember", () => {

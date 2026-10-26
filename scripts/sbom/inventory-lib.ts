@@ -232,6 +232,10 @@ export const PURPOSES: Record<string, { purpose: string; paths: string[] }> = {
     purpose: "TypeScript loader used by the Nest build pipeline.",
     paths: ["nest-cli.json"],
   },
+  undici: {
+    purpose: "HTTP client and connection dispatcher for webhook delivery.",
+    paths: ["src/webhooks/webhook-delivery.service.ts"],
+  },
   "ts-node": {
     purpose: "Runs TypeScript scripts directly (backup drill, webhook receiver, sbom tooling, seeding).",
     paths: ["scripts/", "prisma/seed-demo.ts"],

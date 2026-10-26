@@ -199,6 +199,7 @@ export class PaymentsController {
     type: ApiErrorDto,
   })
   @Get(":id/eligibility")
+  @AuthenticatedRoute({ ownership: "user" })
   explainEligibility(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") paymentId: string,

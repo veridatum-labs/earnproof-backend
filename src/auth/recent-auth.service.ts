@@ -13,9 +13,10 @@ export const DESTRUCTIVE_ACTIONS = {
   ORG_DELETE:     "org:delete",
   ISSUER_REVOKE:  "issuer:revoke",
   KEY_REVOKE:     "key:revoke",
+  KEY_INSPECT: "key:inspect",
+  KEY_CUTOVER: "key:cutover",
   SESSION_REVOKE_ALL: "session:revoke_all",
-  KEY_CUTOVER:    "key:cutover",
-  KEY_INSPECT:    "key:inspect",
+  ROLE_CHANGE_APPROVE: "org:role_change:approve",
 } as const;
 
 export type DestructiveAction = (typeof DESTRUCTIVE_ACTIONS)[keyof typeof DESTRUCTIVE_ACTIONS];

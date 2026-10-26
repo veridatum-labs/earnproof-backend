@@ -64,6 +64,7 @@ export interface RoleApprovalPolicyRules {
   requiredApprovals: number;
   approvalExpiryMinutes: number;
   ownerChangesRequireOwnerApproval: boolean;
+  requireRecentAuth?: boolean;
 }
 
 /** Policy input as received, before validation. */
@@ -73,6 +74,7 @@ export interface RoleApprovalPolicyInput {
   requiredApprovals: number;
   approvalExpiryMinutes: number;
   ownerChangesRequireOwnerApproval: boolean;
+  requireRecentAuth?: boolean;
   /** Accepted only so an attempt to disable it can be reported, never stored. */
   selfApprovalProhibited?: boolean;
   /** Accepted only so an attempt to disable it can be reported, never stored. */
@@ -85,6 +87,7 @@ export const DEFAULT_ROLE_APPROVAL_POLICY: RoleApprovalPolicyRules = {
   requiredApprovals: 1,
   approvalExpiryMinutes: 24 * 60,
   ownerChangesRequireOwnerApproval: true,
+  requireRecentAuth: true,
 };
 
 /** Stable violation codes. Clients may branch on these; messages may change. */
@@ -232,6 +235,7 @@ export function normalizeRoleApprovalPolicy(
     requiredApprovals: input.requiredApprovals,
     approvalExpiryMinutes: input.approvalExpiryMinutes,
     ownerChangesRequireOwnerApproval: input.ownerChangesRequireOwnerApproval,
+    requireRecentAuth: input.requireRecentAuth ?? true,
   };
 }
 
@@ -252,6 +256,7 @@ export function diffRoleApprovalPolicies(
     "requiredApprovals",
     "approvalExpiryMinutes",
     "ownerChangesRequireOwnerApproval",
+    "requireRecentAuth",
   ];
 
   return fields
@@ -267,6 +272,7 @@ export interface RoleChangeEvaluation {
   eligibleApproverRoles: OrganizationMemberRole[];
   ownerApprovalRequired: boolean;
   approvalExpiryMinutes: number;
+  requireRecentAuth: boolean;
   separationOfDuties: SeparationOfDuties;
 }
 
@@ -301,6 +307,7 @@ export function evaluateRoleChange(
       : [...policy.approverRoles],
     ownerApprovalRequired,
     approvalExpiryMinutes: policy.approvalExpiryMinutes,
+    requireRecentAuth: policy.requireRecentAuth ?? true,
     separationOfDuties: SEPARATION_OF_DUTIES,
   };
 }

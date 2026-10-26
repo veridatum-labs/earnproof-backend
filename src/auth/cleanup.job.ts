@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { PrismaService } from "../database/prisma.service";
@@ -28,14 +28,14 @@ export class CleanupJob {
     private readonly sessionService: SessionService,
     private readonly auditService: AuthAuditService,
     private readonly prisma: PrismaService,
-    private readonly leaseService: DistributedLeaseService,
     configService: ConfigService,
+    @Optional() private readonly leaseService?: DistributedLeaseService,
   ) {
     this.challengeRetentionDays = Number(
-      configService.get<number>("auth.challengeRetentionDays") ?? 7,
+      configService?.get<number>("auth.challengeRetentionDays") ?? 7,
     );
     this.auditRetentionDays = Number(
-      configService.get<number>("auth.auditRetentionDays") ?? 90,
+      configService?.get<number>("auth.auditRetentionDays") ?? 90,
     );
   }
 
@@ -44,16 +44,18 @@ export class CleanupJob {
       CronExpression.EVERY_DAY_AT_MIDNIGHT,
   )
   async deleteExpiredSessions(): Promise<void> {
-    const leaseResult = await this.leaseService.acquireLease(
-      AUTH_CLEANUP_JOB_NAME,
-      AUTH_CLEANUP_LEASE_DURATION_MS,
-    );
-
-    if (!leaseResult.acquired) {
-      this.logger.debug(
-        `Auth cleanup lease held by another instance (${leaseResult.owner}); skipping session cleanup`,
+    if (this.leaseService) {
+      const leaseResult = await this.leaseService.acquireLease(
+        AUTH_CLEANUP_JOB_NAME,
+        AUTH_CLEANUP_LEASE_DURATION_MS,
       );
-      return;
+
+      if (!leaseResult.acquired) {
+        this.logger.debug(
+          `Auth cleanup lease held by another instance (${leaseResult.owner}); skipping session cleanup`,
+        );
+        return;
+      }
     }
 
     try {
@@ -61,7 +63,7 @@ export class CleanupJob {
       this.logger.log(`Removed ${deleted} expired authentication session(s)`);
     } finally {
       // Renewal: extend the lease before exiting
-      await this.leaseService.renewLease(
+      await this.leaseService?.renewLease(
         AUTH_CLEANUP_JOB_NAME,
         AUTH_CLEANUP_LEASE_DURATION_MS,
       );
@@ -73,16 +75,18 @@ export class CleanupJob {
       CronExpression.EVERY_DAY_AT_2AM,
   )
   async deleteOldChallenges(): Promise<void> {
-    const leaseResult = await this.leaseService.acquireLease(
-      AUTH_CLEANUP_JOB_NAME,
-      AUTH_CLEANUP_LEASE_DURATION_MS,
-    );
-
-    if (!leaseResult.acquired) {
-      this.logger.debug(
-        `Auth cleanup lease held by another instance (${leaseResult.owner}); skipping challenge cleanup`,
+    if (this.leaseService) {
+      const leaseResult = await this.leaseService.acquireLease(
+        AUTH_CLEANUP_JOB_NAME,
+        AUTH_CLEANUP_LEASE_DURATION_MS,
       );
-      return;
+
+      if (!leaseResult.acquired) {
+        this.logger.debug(
+          `Auth cleanup lease held by another instance (${leaseResult.owner}); skipping challenge cleanup`,
+        );
+        return;
+      }
     }
 
     try {
@@ -90,7 +94,7 @@ export class CleanupJob {
       this.logger.log(`Removed ${deleted} old challenge record(s)`);
     } finally {
       // Renewal: extend the lease before exiting
-      await this.leaseService.renewLease(
+      await this.leaseService?.renewLease(
         AUTH_CLEANUP_JOB_NAME,
         AUTH_CLEANUP_LEASE_DURATION_MS,
       );
@@ -102,16 +106,18 @@ export class CleanupJob {
       CronExpression.EVERY_DAY_AT_3AM,
   )
   async deleteOldAuditEvents(): Promise<void> {
-    const leaseResult = await this.leaseService.acquireLease(
-      AUTH_CLEANUP_JOB_NAME,
-      AUTH_CLEANUP_LEASE_DURATION_MS,
-    );
-
-    if (!leaseResult.acquired) {
-      this.logger.debug(
-        `Auth cleanup lease held by another instance (${leaseResult.owner}); skipping audit cleanup`,
+    if (this.leaseService) {
+      const leaseResult = await this.leaseService.acquireLease(
+        AUTH_CLEANUP_JOB_NAME,
+        AUTH_CLEANUP_LEASE_DURATION_MS,
       );
-      return;
+
+      if (!leaseResult.acquired) {
+        this.logger.debug(
+          `Auth cleanup lease held by another instance (${leaseResult.owner}); skipping audit cleanup`,
+        );
+        return;
+      }
     }
 
     try {
@@ -121,7 +127,7 @@ export class CleanupJob {
       this.logger.log(`Removed ${deleted} old auth audit event(s)`);
     } finally {
       // Renewal: extend the lease before exiting
-      await this.leaseService.renewLease(
+      await this.leaseService?.renewLease(
         AUTH_CLEANUP_JOB_NAME,
         AUTH_CLEANUP_LEASE_DURATION_MS,
       );

@@ -102,6 +102,7 @@ export class CredentialsController {
   ) {}
 
   @Get("keys")
+  @PublicRoute()
   @ApiOperation({
     summary: "Discover credential verification keys",
     description:
@@ -214,6 +215,7 @@ export class CredentialsController {
 
   /** Verify a bounded batch of portable credentials in one request. */
   @Post("verify/batch")
+  @PublicRoute()
   @ApiOperation({
     summary: "Verify a batch of portable EarnProof credentials",
     description:

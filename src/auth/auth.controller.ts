@@ -154,6 +154,7 @@ export class AuthController {
   @ApiResponse({ status: HttpStatus.UNAUTHORIZED, type: ApiErrorDto })
   @UseGuards(AuthGuard)
   @Get("sessions")
+  @AuthenticatedRoute({ ownership: "user" })
   async listSessions(@CurrentUser() session: AuthenticatedSession) {
     const sessions = await this.sessionService.listForUser(session.id);
     return sessions.map((item) => ({
@@ -170,6 +171,7 @@ export class AuthController {
   @UseGuards(AuthGuard)
   @Patch("sessions/:sessionId")
   @HttpCode(HttpStatus.NO_CONTENT)
+  @AuthenticatedRoute({ ownership: "user" })
   async renameSession(
     @CurrentUser() session: AuthenticatedSession,
     @Param("sessionId") sessionId: string,
@@ -256,6 +258,7 @@ export class AuthController {
   })
   @UseGuards(AuthGuard)
   @Get("sessions")
+  @AuthenticatedRoute({ ownership: "user" })
   async getSessions(@CurrentUser() session: AuthenticatedSession) {
     const sessions = await this.sessionService.getSessions(session.id);
     
@@ -307,6 +310,7 @@ export class AuthController {
   @UseGuards(AuthGuard)
   @HttpCode(HttpStatus.OK)
   @Post("sessions/:sessionId/revoke")
+  @AuthenticatedRoute({ ownership: "user" })
   async revokeSingleSession(
     @Param("sessionId") sessionId: string,
     @CurrentUser() session: AuthenticatedSession,
@@ -356,6 +360,7 @@ export class AuthController {
   @UseGuards(AuthGuard)
   @HttpCode(HttpStatus.OK)
   @Post("sessions/revoke-all-other")
+  @AuthenticatedRoute({ ownership: "user" })
   async revokeAllOtherSessions(@CurrentUser() session: AuthenticatedSession) {
     const revokedCount = await this.sessionService.revokeAllOtherSessions(
       session.id,
@@ -388,6 +393,7 @@ export class AuthController {
   @ApiBearerAuth()
   @UseGuards(AuthGuard)
   @Post("assert")
+  @AuthenticatedRoute({ ownership: "user" })
   async issueAssertion(
     @CurrentUser() session: AuthenticatedSession,
     @Body() body: IssueAssertionDto,
@@ -416,6 +422,7 @@ export class AuthController {
   @ApiBearerAuth()
   @UseGuards(AuthGuard)
   @Get("sessions/risk-events")
+  @AuthenticatedRoute({ ownership: "user" })
   async getRiskEvents(
     @CurrentUser() session: AuthenticatedSession,
     @Query() query: ListRiskEventsDto,
@@ -434,6 +441,7 @@ export class AuthController {
   @UseGuards(AuthGuard)
   @HttpCode(HttpStatus.OK)
   @Post("sessions/risk-events/:id/revoke-sessions")
+  @AuthenticatedRoute({ ownership: "user" })
   async revokeRiskEventSessions(
     @CurrentUser() session: AuthenticatedSession,
     @Param("id") riskEventId: string,
@@ -451,6 +459,7 @@ export class AuthController {
   @ApiBearerAuth()
   @UseGuards(AuthGuard)
   @Get("reauthentication-history")
+  @AuthenticatedRoute({ ownership: "user" })
   async getReauthenticationHistory(
     @CurrentUser() session: AuthenticatedSession,
     @Query() query: ListReauthHistoryDto,

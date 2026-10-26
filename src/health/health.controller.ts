@@ -208,6 +208,7 @@ export class HealthController {
     type: ApiErrorDto,
   })
   @Get("deployment")
+  @PublicRoute()
   getDeploymentMetadata(
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,

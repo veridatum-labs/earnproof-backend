@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { OrganizationMemberRole, ResourceStatus } from "@prisma/client";
 import { AuthenticatedUser } from "../auth/auth.types";
@@ -12,12 +13,15 @@ import { AssignOrganizationMemberDto } from "./dto/assign-organization-member.dt
 import { ListOrganizationMembersDto } from "./dto/list-organization-members.dto";
 import { OrganizationMemberResponseDto } from "./dto/organization-member-response.dto";
 import { UpdateOrganizationMemberRoleDto } from "./dto/update-organization-member-role.dto";
+import { RoleApprovalPolicyService } from "./role-approval-policy/role-approval-policy.service";
+import { evaluateRoleChange } from "./role-approval-policy/role-approval-policy.rules";
 
 @Injectable()
 export class OrganizationMembersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sessions: SessionService,
+    @Optional() private readonly roleApprovalPolicyService?: RoleApprovalPolicyService,
   ) {}
 
   /**
@@ -165,10 +169,22 @@ export class OrganizationMembersService {
       }
     }
 
+    // Enforce dual-control role approval policy if configured
+    if (this.roleApprovalPolicyService) {
+      const policy = await this.roleApprovalPolicyService.getActive(user, organizationId);
+      const evaluation = evaluateRoleChange(policy, member.role, input.role);
+      if (evaluation.approvalRequired) {
+        throw new ConflictException(
+          `Role change from ${member.role} to ${input.role} touches a protected role and requires dual-control approval. ` +
+          `Submit a role-change request via POST /organizations/${organizationId}/role-change-requests.`,
+        );
+      }
+    }
+
     // Update the role
     const updated = await this.prisma.organizationMember.update({
       where: { id: memberId },
-      data: { role: input.role },
+      data: { role: input.role, revision: { increment: 1 } },
       include: { user: true },
     });
 
@@ -384,6 +400,7 @@ export class OrganizationMembersService {
       walletAddress: member.user?.walletAddress || "",
       role: member.role,
       status: member.status,
+      revision: member.revision ?? 0,
       joinedAt: member.joinedAt,
       createdAt: member.createdAt,
       updatedAt: member.updatedAt,

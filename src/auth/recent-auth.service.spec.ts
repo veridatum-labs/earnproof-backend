@@ -203,6 +203,8 @@ describe("RecentAuthService", () => {
       expect(DESTRUCTIVE_ACTIONS.ORG_DELETE).toBe("org:delete");
       expect(DESTRUCTIVE_ACTIONS.ISSUER_REVOKE).toBe("issuer:revoke");
       expect(DESTRUCTIVE_ACTIONS.KEY_REVOKE).toBe("key:revoke");
+      expect(DESTRUCTIVE_ACTIONS.KEY_INSPECT).toBe("key:inspect");
+      expect(DESTRUCTIVE_ACTIONS.KEY_CUTOVER).toBe("key:cutover");
       expect(DESTRUCTIVE_ACTIONS.SESSION_REVOKE_ALL).toBe("session:revoke_all");
     });
 

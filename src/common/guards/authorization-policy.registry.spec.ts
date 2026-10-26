@@ -53,7 +53,7 @@ describe("authorization policy registry", () => {
       WebhooksController,
     ]);
 
-    expect(matrix).toHaveLength(58);
+    expect(matrix).toHaveLength(116);
     expect(matrix.every(({ policy }) => policy.access)).toBe(true);
   });
 
