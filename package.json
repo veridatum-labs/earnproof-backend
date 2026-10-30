@@ -17,6 +17,7 @@
     "start": "node dist/main.js",
     "start:nest": "nest start",
     "start:dev": "nest start --watch",
+    "security:malware-scan": "node scripts/security/scan-malware.mjs",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\"",
     "typecheck": "tsc --noEmit",
     "test": "jest",
