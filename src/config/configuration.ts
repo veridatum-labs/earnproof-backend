@@ -115,6 +115,9 @@ export const configuration = () => ({
   paymentEncryptionKeyVersion: Number(
     process.env.PAYMENT_ENCRYPTION_KEY_VERSION ?? 0,
   ),
+  envelopeEncryption: {
+    provider: process.env.ENVELOPE_ENCRYPTION_PROVIDER ?? "local",
+  },
   verificationEventRetentionDays: Number(
     process.env.VERIFICATION_EVENT_RETENTION_DAYS ?? 90,
   ),
@@ -346,5 +349,67 @@ export const configuration = () => ({
       .map((value) => value.trim())
       .filter(Boolean),
     routes: [],
+  },
+});
+
+  //Configuration addition
+  apiDeprecation: {
+    allowedDocumentationOrigins: (
+      process.env.API_DEPRECATION_ALLOWED_DOCUMENTATION_ORIGINS ??
+      ""
+    )
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+
+    routes: [],
+  },
+  database: {
+    workloadTimeouts: {
+      interactive: {
+        statementTimeoutMs: Number(
+          process.env.DATABASE_TIMEOUT_INTERACTIVE_STATEMENT_MS ?? 10_000,
+        ),
+        idleInTransactionTimeoutMs: Number(
+          process.env.DATABASE_TIMEOUT_INTERACTIVE_IDLE_MS ?? 30_000,
+        ),
+        lockTimeoutMs: Number(
+          process.env.DATABASE_TIMEOUT_INTERACTIVE_LOCK_MS ?? 5_000,
+        ),
+      },
+      job: {
+        statementTimeoutMs: Number(
+          process.env.DATABASE_TIMEOUT_JOB_STATEMENT_MS ?? 120_000,
+        ),
+        idleInTransactionTimeoutMs: Number(
+          process.env.DATABASE_TIMEOUT_JOB_IDLE_MS ?? 300_000,
+        ),
+        lockTimeoutMs: Number(
+          process.env.DATABASE_TIMEOUT_JOB_LOCK_MS ?? 30_000,
+        ),
+      },
+      migration: {
+        statementTimeoutMs: Number(
+          process.env.DATABASE_TIMEOUT_MIGRATION_STATEMENT_MS ?? 3600_000,
+        ),
+        idleInTransactionTimeoutMs: Number(
+          process.env.DATABASE_TIMEOUT_MIGRATION_IDLE_MS ?? 3600_000,
+        ),
+        lockTimeoutMs: Number(
+          process.env.DATABASE_TIMEOUT_MIGRATION_LOCK_MS ?? 300_000,
+        ),
+      },
+      report: {
+        statementTimeoutMs: Number(
+          process.env.DATABASE_TIMEOUT_REPORT_STATEMENT_MS ?? 600_000,
+        ),
+        idleInTransactionTimeoutMs: Number(
+          process.env.DATABASE_TIMEOUT_REPORT_IDLE_MS ?? 900_000,
+        ),
+        lockTimeoutMs: Number(
+          process.env.DATABASE_TIMEOUT_REPORT_LOCK_MS ?? 60_000,
+        ),
+      },
+    },
   },
 });

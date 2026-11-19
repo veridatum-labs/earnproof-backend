@@ -11,6 +11,8 @@ import { ConsentModule } from "./common/consent/consent.module";
 import { DisclosureModule } from "./common/disclosure/disclosure.module";
 import { AuthorizationPolicyRegistry } from "./common/guards/authorization-policy.registry";
 import { CommonModule } from "./common/common.module";
+import { EnvelopeEncryptionModule } from "./common/crypto/envelope-encryption.module";
+import { TenantBudgetModule } from "./common/limits/tenant-budget.module";
 import { configuration } from "./config/configuration";
 import { validateEnv } from "./config/env.validation";
 import { CredentialsModule } from "./credentials/credentials.module";
@@ -62,7 +64,9 @@ import { SecurityModule } from "./security/security.module";
     AuthModule,
     RateLimitModule,
     DisputesModule,
+    TenantBudgetModule,
     HealthModule,
+    EnvelopeEncryptionModule,
     IntegrationsModule,
     OrganizationsModule,
     DataResidencyModule,
