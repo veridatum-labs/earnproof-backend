@@ -12,6 +12,7 @@ import {
 } from "./deployment-metadata.service";
 import { HealthHysteresisService } from "./health-hysteresis.service";
 import { ClockSkewMonitorService } from "./clock-skew-monitor.service";
+import { ProcessPressureMonitorService } from "./process-pressure-monitor.service";
 import { ContractIdentityService } from "./contract-identity.service";
 import {
   DependencyKind,
@@ -85,6 +86,7 @@ export class HealthService {
     @Optional() p5?: any,
     @Optional() private readonly clockSkew?: ClockSkewMonitorService,
     @Optional() private readonly contractIdentity?: ContractIdentityService,
+    @Optional() private readonly processPressure?: ProcessPressureMonitorService,
   ) {
     const rest = [p3, p4, p5].filter(Boolean);
     for (const item of rest) {
@@ -168,6 +170,11 @@ export class HealthService {
     if (this.contractIdentity?.active) {
       requiredProbes.push(Promise.resolve(this.probeContractIdentity()));
     }
+    // Same reasoning: in-memory state, and a cached verdict could outlive the
+    // pressure it reflects. Only a stable reason code is reported publicly.
+    if (this.processPressure?.enabled) {
+      requiredProbes.push(Promise.resolve(this.probeProcessPressureReadiness()));
+    }
     const dependencies = await Promise.all(requiredProbes);
 
     const blocked = dependencies.some(
@@ -245,6 +252,7 @@ export class HealthService {
         Promise.resolve(this.probeCircuitBreakers()),
       ),
       Promise.resolve(this.probeClockSkewDiagnostics()),
+      Promise.resolve(this.probeProcessPressureDiagnostics()),
     );
     const dependencies = await Promise.all(diagProbes);
 
@@ -666,6 +674,62 @@ export class HealthService {
           reason: `clock_skew_unknown:${snapshot.reason ?? "no_samples"}`,
         };
     }
+  }
+
+  /**
+   * Public readiness view of process pressure: ok, or a single stable reason
+   * code. No delay, heap figure or threshold is included, so the unauthenticated
+   * probe discloses nothing about process internals.
+   */
+  private probeProcessPressureReadiness(): DependencyResult {
+    const blocked = this.processPressure?.blocksReadiness() ?? false;
+    return {
+      name: "process_pressure",
+      kind: DependencyKind.REQUIRED,
+      status: blocked ? DependencyStatus.ERROR : DependencyStatus.OK,
+      reason: blocked ? "process_pressure_degraded" : undefined,
+      durationMs: 0,
+    };
+  }
+
+  /** Authorized diagnostics view: adds the measurements and thresholds. */
+  private probeProcessPressureDiagnostics(): DependencyResult {
+    if (!this.processPressure) {
+      return {
+        name: "process_pressure",
+        kind: DependencyKind.OPTIONAL,
+        status: DependencyStatus.NOT_CONFIGURED,
+        reason: "process_pressure_monitor_absent",
+      };
+    }
+    if (!this.processPressure.enabled) {
+      return {
+        name: "process_pressure",
+        kind: DependencyKind.OPTIONAL,
+        status: DependencyStatus.DISABLED,
+      };
+    }
+
+    const snapshot = this.processPressure.snapshot();
+    // REQUIRED only while it actually gates readiness, so diagnostics and
+    // readiness can never disagree.
+    if (this.processPressure.blocksReadiness()) {
+      return {
+        name: "process_pressure",
+        kind: DependencyKind.REQUIRED,
+        status: DependencyStatus.ERROR,
+        reason: `process_pressure_degraded:${snapshot.reasons.join(",")}`,
+        durationMs: 0,
+        processPressure: snapshot,
+      };
+    }
+    return {
+      name: "process_pressure",
+      kind: DependencyKind.OPTIONAL,
+      status: DependencyStatus.OK,
+      durationMs: 0,
+      processPressure: snapshot,
+    };
   }
 
   private probeCircuitBreakers(): DependencyResult {
