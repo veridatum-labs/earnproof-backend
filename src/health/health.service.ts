@@ -13,6 +13,7 @@ import {
 import { HealthHysteresisService } from "./health-hysteresis.service";
 import { ClockSkewMonitorService } from "./clock-skew-monitor.service";
 import { ContractIdentityService } from "./contract-identity.service";
+import { DatabaseMaintenanceService } from "../database/database-maintenance.service";
 import {
   DependencyKind,
   DependencyResult,
@@ -76,6 +77,7 @@ export class HealthService {
   private readonly contractSuccessor?: ContractSuccessorService;
   private readonly migrationLease?: MigrationLeaseService;
   private readonly hysteresis?: HealthHysteresisService;
+  private readonly databaseMaintenance?: DatabaseMaintenanceService;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -85,7 +87,11 @@ export class HealthService {
     @Optional() p5?: any,
     @Optional() private readonly clockSkew?: ClockSkewMonitorService,
     @Optional() private readonly contractIdentity?: ContractIdentityService,
+    @Optional() databaseMaintenance?: DatabaseMaintenanceService,
   ) {
+    if (databaseMaintenance) {
+      this.databaseMaintenance = databaseMaintenance;
+    }
     const rest = [p3, p4, p5].filter(Boolean);
     for (const item of rest) {
       if (item instanceof CircuitBreakerRegistry || typeof item.snapshotAll === "function") {
@@ -96,6 +102,8 @@ export class HealthService {
         this.contractSuccessor = item;
       } else if (typeof item.acquire === "function" || typeof item.release === "function") {
         this.migrationLease = item;
+      } else if (typeof item.checkMaintenanceHealth === "function") {
+        this.databaseMaintenance = item;
       }
     }
   }
@@ -167,6 +175,13 @@ export class HealthService {
     // "ok" must not outlive a newly detected network/contract mismatch.
     if (this.contractIdentity?.active) {
       requiredProbes.push(Promise.resolve(this.probeContractIdentity()));
+    }
+    if (this.databaseMaintenance) {
+      requiredProbes.push(
+        this.probeCached("database_maintenance", DependencyKind.OPTIONAL, () =>
+          this.databaseMaintenance!.probeDependencyResult(),
+        ),
+      );
     }
     const dependencies = await Promise.all(requiredProbes);
 
@@ -246,6 +261,13 @@ export class HealthService {
       ),
       Promise.resolve(this.probeClockSkewDiagnostics()),
     );
+    if (this.databaseMaintenance) {
+      diagProbes.push(
+        this.probeCached("database_maintenance", DependencyKind.OPTIONAL, () =>
+          this.databaseMaintenance!.probeDependencyResult(),
+        ),
+      );
+    }
     const dependencies = await Promise.all(diagProbes);
 
     const blocked = dependencies.some(
