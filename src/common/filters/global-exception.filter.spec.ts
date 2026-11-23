@@ -87,6 +87,29 @@ describe("GlobalExceptionFilter", () => {
       expect(requestId).not.toBe("<script>xss</script>");
       expect(requestId).toMatch(/^[a-f0-9]{32}$/);
     });
+
+    it("redacts sensitive addresses and tokens from server-side logs and response bodies", () => {
+      const errorLogger = jest.spyOn(filter["logger"], "error");
+      const { host, json } = makeHost({ requestId: "safe-req-id" });
+      const sensitiveMsg =
+        "Error for wallet GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR with token ep_live_secret1234567890";
+
+      filter.catch(new Error(sensitiveMsg), host);
+
+      expect(errorLogger).toHaveBeenCalled();
+      const loggedMsg = errorLogger.mock.calls[0][0];
+      expect(loggedMsg).not.toContain(
+        "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR",
+      );
+      expect(loggedMsg).not.toContain("ep_live_secret1234567890");
+
+      const responseBody = json.mock.calls[0][0];
+      expect(responseBody.requestId).toBe("safe-req-id");
+      expect(JSON.stringify(responseBody)).not.toContain(
+        "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR",
+      );
+      expect(JSON.stringify(responseBody)).not.toContain("ep_live_secret1234567890");
+    });
   });
 
   // ── 401 Unauthorized sub-codes ────────────────────────────────────────────

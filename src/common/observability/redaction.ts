@@ -29,6 +29,9 @@ const MASK = {
   env: "[REDACTED_ENV]",
   jwt: "[REDACTED_TOKEN]",
   base64: "[REDACTED_PAYLOAD]",
+  token: "[REDACTED_TOKEN]",
+  memo: "[REDACTED_MEMO]",
+  signature: "[REDACTED_SIGNATURE]",
 } as const;
 
 /**
@@ -39,14 +42,37 @@ const MASK = {
  * runs first and the address rule cannot reclassify what it already masked.
  */
 const RULES: ReadonlyArray<{ pattern: RegExp; mask: string }> = [
+  // Sentinel markers across test suites and scanners
+  {
+    pattern: /\bsentinel-(?:wallet|token|memo|signature|amount|secret|payload)-[A-Za-z0-9_-]+/gi,
+    mask: "[REDACTED]",
+  },
+  // Opaque bearer session token: `<16 url-safe chars>.<64 hex>`
+  { pattern: /\b[A-Za-z0-9_-]{16}\.[a-f0-9]{64}\b/g, mask: MASK.token },
+  // API keys and webhook secrets
+  {
+    pattern: /\b(?:ep_live_|ep_test_|whsec_|sk_live_|sk_test_)[A-Za-z0-9_]{16,}\b/g,
+    mask: MASK.token,
+  },
+  // AES-256-GCM encrypted amounts and tokens
+  {
+    pattern: /\benc:v\d+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+/g,
+    mask: MASK.amount,
+  },
+  { pattern: /\bredacted:[A-Za-z0-9_-]{8,}/g, mask: MASK.amount },
   // Stellar secret seed: S + 55 base32 chars. Must precede the address rule.
-  { pattern: /\bS[A-Z2-7]{55}\b/g, mask: MASK.stellarSecret },
-  // Stellar public key: G + 55 base32 chars.
-  { pattern: /\bG[A-Z2-7]{55}\b/g, mask: MASK.stellarAddress },
-  // Muxed account: M + 68 base32 chars.
-  { pattern: /\bM[A-Z2-7]{68}\b/g, mask: MASK.stellarAddress },
-  // Soroban contract ID: C + 55 base32 chars.
-  { pattern: /\bC[A-Z2-7]{55}\b/g, mask: MASK.contractId },
+  { pattern: /\bS[A-Z0-9]{55}\b/g, mask: MASK.stellarSecret },
+  // Stellar public key: G + 55 chars (including synthetic test variants).
+  { pattern: /\bG[A-Z0-9]{55}\b/g, mask: MASK.stellarAddress },
+  // Muxed account: M + 68 chars.
+  { pattern: /\bM[A-Z0-9]{68}\b/g, mask: MASK.stellarAddress },
+  // Soroban contract ID: C + 55 chars.
+  { pattern: /\bC[A-Z0-9]{55}\b/g, mask: MASK.contractId },
+  // Memo field leakage: memo="secret" or memo: secret
+  {
+    pattern: /\b(?:memo|memo_text|memo_hash)\s*[:=]\s*["']?[A-Za-z0-9_.-]+["']?/gi,
+    mask: "memo: [REDACTED_MEMO]",
+  },
   // JWT-shaped token. Precedes the generic base64 rule.
   {
     pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,

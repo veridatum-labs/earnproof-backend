@@ -16,6 +16,7 @@ import {
 import { REQUEST_ID_HEADER } from "../interceptors/request-id.interceptor";
 import { randomBytes } from "crypto";
 import { RequestAbortedError } from "../request-context/request-abort";
+import { redact } from "../observability/redaction";
 
 /** Non-standard but widely used status for "client closed request". */
 const CLIENT_CLOSED_REQUEST = 499;
@@ -75,17 +76,21 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     if (statusCode >= 500) {
       this.logger.error(
         `[${requestId}] ${statusCode} ${code}: ${this.safeMessage(exception)}`,
-        exception instanceof Error ? exception.stack : undefined,
+        exception instanceof Error && exception.stack ? redact(exception.stack) : undefined,
       );
     } else if (statusCode === CLIENT_CLOSED_REQUEST) {
       this.logger.debug(`[${requestId}] ${statusCode} ${code}`);
     } else {
-      this.logger.warn(`[${requestId}] ${statusCode} ${code}: ${message}`);
+      this.logger.warn(`[${requestId}] ${statusCode} ${code}: ${redact(message)}`);
     }
 
-    const body: ApiErrorDto = { statusCode, code, message, requestId };
+    const safeMessage = redact(message);
+    const body: ApiErrorDto = { statusCode, code, message: safeMessage, requestId };
     if (violations?.length) {
-      body.violations = violations;
+      body.violations = violations.map((v) => ({
+        ...v,
+        message: redact(v.message),
+      }));
     }
     if (currentRevision !== undefined) {
       body.currentRevision = currentRevision;
@@ -538,8 +543,8 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
   /** Used only for server-side logging – never sent to clients. */
   private safeMessage(exception: unknown): string {
-    if (exception instanceof Error) return exception.message;
-    if (typeof exception === "string") return exception;
-    return String(exception);
+    if (exception instanceof Error) return redact(exception.message);
+    if (typeof exception === "string") return redact(exception);
+    return redact(String(exception));
   }
 }

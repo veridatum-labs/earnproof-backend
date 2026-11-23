@@ -86,6 +86,28 @@ describe("redact", () => {
       expect(out).not.toContain("SABCDEF");
       expect(out).toContain("[REDACTED_ENV]");
     });
+
+    it("removes API keys and webhook secrets", () => {
+      const key = "ep_live_abc1234567890abcdef";
+      const whsec = "whsec_0123456789abcdef01234";
+      const out = redact(`rejected API key ${key} and webhook ${whsec}`);
+      expect(out).not.toContain(key);
+      expect(out).not.toContain(whsec);
+      expect(out).toContain("[REDACTED_TOKEN]");
+    });
+
+    it("removes encrypted amount representations", () => {
+      const enc = "enc:v1:aaaa:bbbb:cccc";
+      expect(redact(`amount was ${enc}`)).toContain("[REDACTED_AMOUNT]");
+    });
+
+    it("removes memo markers and sentinel strings", () => {
+      const sentinel = "sentinel-wallet-test-xyz";
+      const out = redact(`payload failed on ${sentinel} with memo: secret-memo`);
+      expect(out).not.toContain(sentinel);
+      expect(out).not.toContain("secret-memo");
+      expect(out).toContain("[REDACTED]");
+    });
   });
 
   describe("financial values", () => {
