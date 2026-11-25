@@ -375,6 +375,7 @@ model User {
   acceptedInvitations     OrganizationInvitation[] @relation("organizationInvitationsAccepted")
   declinedInvitations     OrganizationInvitation[] @relation("organizationInvitationsDeclined")
   revokedInvitations      OrganizationInvitation[] @relation("organizationInvitationsRevoked")
+  privacyRequests         PrivacyRequest[]
 
   @@index([walletHash])
   @@index([status])
@@ -4801,4 +4802,89 @@ model ContractEventApplied {
 
   @@id([streamKey, eventId])
   @@index([streamKey, ledger])
+}
+
+
+enum PrivacyRequestType {
+  ACCESS
+  CORRECTION
+  RESTRICTION
+  EXPORT
+  DELETION
+}
+
+enum PrivacyRequestStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  IN_PROGRESS
+  COMPLETED
+  DENIED
+  EXPIRED
+  CANCELLED
+}
+
+model PrivacyRequest {
+  id                    String               @id @default(cuid())
+  userId                String
+  type                  PrivacyRequestType
+  status                PrivacyRequestStatus @default(PENDING_VERIFICATION)
+  verificationTokenHash String?
+  verifiedAt            DateTime?
+  requestedAt           DateTime             @default(now())
+  dueAt                 DateTime
+  retentionUntil        DateTime
+  evidenceRef           String?
+  resultDeliveryRef     String?
+  ledgerLimitationNote  String               @default("Immutable ledger records cannot be altered or deleted in place; off-chain records and fulfillment metadata are governed according to policy.")
+  resolutionReason      String?
+  completedAt           DateTime?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@index([status, dueAt])
+}
+
+model OrganizationSessionPolicy {
+  id                     String   @id @default(cuid())
+  organizationId         String   @unique
+  idleTimeoutSeconds     Int      @default(900)
+  maxSessionDurationSec  Int      @default(28800)
+  extensionWindowSec     Int      @default(900)
+  maxExtensionsPerSession Int     @default(3)
+  updatedAt              DateTime @updatedAt
+}
+
+model UserSession {
+  id               String    @id @default(cuid())
+  userId           String
+  organizationId   String?
+  createdAt        DateTime  @default(now())
+  lastActivityAt   DateTime  @default(now())
+  expiresAt        DateTime
+  extensionCount   Int       @default(0)
+  revokedAt        DateTime?
+  revokedReason    String?
+  updatedAt        DateTime  @updatedAt
+
+  auditEvents SessionAuditEvent[]
+
+  @@index([userId, expiresAt])
+  @@index([revokedAt])
+}
+
+model SessionAuditEvent {
+  id         String   @id @default(cuid())
+  sessionId  String
+  userId     String
+  action     String
+  outcome    String
+  metadata   Json?
+  occurredAt DateTime @default(now())
+
+  session UserSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, occurredAt])
 }
