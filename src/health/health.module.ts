@@ -23,6 +23,7 @@ import { CapabilitiesController } from "./capabilities.controller";
     DatabasePoolMonitorService,
     DeploymentMetadataService,
     ProtocolPauseService,
+    PauseAcknowledgementService,
     ClockSkewMonitorService,
     ProcessPressureMonitorService,
     SorobanRpcClient,
@@ -32,6 +33,7 @@ import { CapabilitiesController } from "./capabilities.controller";
   exports: [
     HealthService,
     ProtocolPauseService,
+    PauseAcknowledgementService,
     ClockSkewMonitorService,
     ProcessPressureMonitorService,
     ContractIdentityService,

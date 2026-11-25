@@ -4,6 +4,8 @@ import { ApiKeysModule } from "../api-keys/api-keys.module";
 import { ContractSuccessorService } from "./contract-successor.service";
 import { CapabilityBitmapService } from "./capability-bitmap.service";
 import { ContractsController } from "./contracts.controller";
+import { ContractDecommissionController } from "./contract-decommission.controller";
+import { ContractDecommissionService } from "./contract-decommission.service";
 
 /**
  * Contracts Module
