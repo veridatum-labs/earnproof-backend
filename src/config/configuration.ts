@@ -66,6 +66,26 @@ export const configuration = () => ({
   trustedProxyCidrs: process.env.TRUSTED_PROXY_CIDRS
     ? process.env.TRUSTED_PROXY_CIDRS.split(",").map((cidr) => cidr.trim())
     : [],
+  hostValidation: {
+    enabled: process.env.ENFORCE_HOST_VALIDATION === "true",
+    allowedHosts: new Set(
+      (process.env.ALLOWED_HOSTS ?? "")
+        .split(",")
+        .map((entry) => entry.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+    canonicalOrigin:
+      process.env.CANONICAL_ORIGIN ??
+      process.env.API_URL ??
+      process.env.APP_URL ??
+      "http://localhost:3000",
+    trustedProxies: new Set(
+      (process.env.TRUSTED_PROXIES ?? "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    ),
+  },
   databaseUrl: process.env.DATABASE_URL,
   redisUrl: process.env.REDIS_URL,
   appUrl: process.env.APP_URL ?? "http://localhost:3000",

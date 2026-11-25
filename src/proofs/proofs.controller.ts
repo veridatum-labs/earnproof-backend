@@ -8,8 +8,9 @@ import {
   Param,
   Patch,
   Post,
-  Req,
   Query,
+  Req,
+  Res,
   UseGuards,
   BadRequestException,
   ForbiddenException,
@@ -25,7 +26,7 @@ import {
 } from "@nestjs/swagger";
 import { SkipThrottle, Throttle } from "@nestjs/throttler";
 import { ApiKeyScope, SharingOutcome } from "@prisma/client";
-import { Request } from "express";
+import { Request, Response } from "express";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import {
@@ -79,6 +80,13 @@ import { PrismaService } from "../database/prisma.service";
 import { ProofCapacityPreflightService } from "./proof-capacity-preflight.service";
 import { ProofCapacityPreflightDto } from "./dto/capacity-preflight.dto";
 import { BoundedRefreshService } from "./bounded-refresh.service";
+import {
+  computeProofEtag,
+  getProofCacheControl,
+  matchesIfNoneMatch,
+  publicProofStatus,
+  type ProofVerificationView,
+} from "./proof-etag.policy";
 
 @ApiTags("proofs")
 @Controller("proofs")
@@ -912,7 +920,11 @@ export class ProofsController {
   @Throttle({ verification: {} })
   @Get(":id/verify")
   @PublicRoute()
-  async verifyProof(@Param("id") proofIdOrToken: string, @Req() request: Request) {
+  async verifyProof(
+    @Param("id") proofIdOrToken: string,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response?: Response,
+  ) {
     // Check if this might be a sharing token
     let actualProofId = proofIdOrToken;
     let usedSharingToken = false;
@@ -941,9 +953,28 @@ export class ProofsController {
     }
 
     // Proceed with normal proof verification
-    const result = await this.proofsService.verifyProof(actualProofId, { 
+    const result = await this.proofsService.verifyProof(actualProofId, {
       ip: request.ip,
     });
+
+    // Privacy-safe ETag and cache policy: the ETag changes on every public
+    // status transition, and revoked/expired/unknown proofs are never served
+    // from a stale cache. A matching If-None-Match yields 304 with no body;
+    // a malformed tag falls through to a fresh 200 response.
+    const view: ProofVerificationView = {
+      proofId: actualProofId,
+      status: publicProofStatus(result.status),
+      updatedAtIso: result.proof?.updatedAt ?? new Date().toISOString(),
+    };
+    const etag = computeProofEtag(view);
+    const cacheControl = getProofCacheControl(view.status);
+    response?.set("ETag", etag).set("Cache-Control", cacheControl);
+
+    const ifNoneMatch = request.headers["if-none-match"];
+    if (matchesIfNoneMatch(ifNoneMatch, etag)) {
+      response?.status(304);
+      return;
+    }
 
     return result;
   }

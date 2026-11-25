@@ -29,6 +29,7 @@ import {
   requestContentTypeMiddleware,
   requestContentTypeRejectionReason,
 } from "./common/middleware/request-content-type.middleware";
+import { hostValidationMiddleware, type HostValidationConfig } from "./common/middleware/host-validation.middleware";
 import { METRIC_NAMES } from "./common/observability/metrics.catalog";
 import { MetricsRegistry } from "./common/observability/metrics.registry";
 
@@ -59,6 +60,8 @@ export interface AppConfiguration {
   readonly metrics?: MetricsRegistry;
   /** Explicitly trusted reverse-proxy hop count and peer CIDR ranges. */
   readonly clientIpPolicy?: ClientIpPolicy;
+  /** Host header and canonical origin validation (opt-in via configuration). */
+  readonly hostValidation?: HostValidationConfig;
 }
 
 export function configureApp(
@@ -70,14 +73,22 @@ export function configureApp(
     proxyHops: 0,
     trustedProxyCidrs: [],
   };
-  app
-    .getHttpAdapter()
-    .getInstance()
-    .set("trust proxy", createProxyTrustFunction(clientIpPolicy));
-  app.use(clientIpPolicyMiddleware(clientIpPolicy));
+app
+  .getHttpAdapter()
+  .getInstance()
+  .set("trust proxy", createProxyTrustFunction(clientIpPolicy));
+app.use(clientIpPolicyMiddleware(clientIpPolicy));
 
-  // ── Body limits ──────────────────────────────────────────────────────────
-  app.use(requestContentTypeMiddleware);
+// ── Host header and canonical origin validation ─────────────────────────
+// Rejects ambiguous, duplicate, malformed, or unallowlisted hosts before any
+// body parsing or routing work. Forwarded hosts are honored only from trusted
+// proxies. Opt-in via configuration.hostValidation.enabled.
+if (config.hostValidation) {
+  app.use(hostValidationMiddleware(config.hostValidation));
+}
+
+// ── Body limits ──────────────────────────────────────────────────────────
+app.use(requestContentTypeMiddleware);
   app.use(compressedRequestBodyMiddleware);
 
   // Mounted per prefix, longest first, then a global parser. body-parser skips

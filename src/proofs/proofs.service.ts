@@ -2924,6 +2924,7 @@ export class ProofsService {
         network: proof.network,
         issuedAt: proof.createdAt.toISOString(),
         expiresAt: proof.expiresAt.toISOString(),
+        updatedAt: proof.updatedAt.toISOString(),
         revokedAt: proof.revokedAt?.toISOString() ?? null,
         revocationReasonCode: proof.revocationReasonCode ?? null,
         contractStatus: contractStatus ?? {

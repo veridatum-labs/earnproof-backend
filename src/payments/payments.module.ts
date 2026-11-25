@@ -14,6 +14,7 @@ import { PaymentAccountRotationService } from "./payment-account-rotation.servic
 import { PaymentBackfillService } from "./payment-backfill.service";
 import { PaymentBackfillsController } from "./payment-backfills.controller";
 import { Clock, SystemClock } from "../common/time/clock";
+import { PaymentTombstoneService, PrismaTombstoneStore } from "./payment-tombstone.service";
 
 @Module({
   imports: [AuthModule, StellarModule, QuotasModule],
@@ -27,6 +28,8 @@ import { Clock, SystemClock } from "../common/time/clock";
     PaymentAccountRotationService,
     PaymentBackfillService,
     { provide: Clock, useClass: SystemClock },
+    PrismaTombstoneStore,
+    PaymentTombstoneService,
     PaymentsService,
     PaymentFinalityService,
     PaymentEligibilityService,
