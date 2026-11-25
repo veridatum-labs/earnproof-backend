@@ -19,6 +19,10 @@ import {
   DatabasePoolMonitorService,
 } from "./database-pool-monitor.service";
 import {
+  DATABASE_MAINTENANCE_REASONS,
+  DatabaseMaintenanceMonitorService,
+} from "./database-maintenance-monitor.service";
+import {
   DependencyKind,
   DependencyResult,
   DependencyStatus,
@@ -81,6 +85,8 @@ export class HealthService {
   private readonly contractSuccessor?: ContractSuccessorService;
   private readonly migrationLease?: MigrationLeaseService;
   private readonly hysteresis?: HealthHysteresisService;
+  private readonly poolMonitor?: DatabasePoolMonitorService;
+  private readonly maintenanceMonitor?: DatabaseMaintenanceMonitorService;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -102,6 +108,14 @@ export class HealthService {
         this.contractSuccessor = item;
       } else if (typeof item.acquire === "function" || typeof item.release === "function") {
         this.migrationLease = item;
+      } else if (typeof item.sample === "function" && typeof item.blocksReadiness === "function") {
+        // Both DatabasePoolMonitorService and DatabaseMaintenanceMonitorService have
+        // sample() and blocksReadiness(). Distinguish by recordProbeOutcome (pool only)
+        if (typeof item.recordProbeOutcome === "function") {
+          this.poolMonitor = item;
+        } else {
+          this.maintenanceMonitor = item;
+        }
       }
     }
   }
@@ -197,6 +211,17 @@ export class HealthService {
       if (pool) dependencies.push(pool);
     }
 
+    // Database maintenance health gates readiness only through its
+    // sustained-critical latch. Sampled after the database probe succeeds.
+    // Not cached: the monitor rate-limits its own reads.
+    if (
+      this.maintenanceMonitor?.enabled &&
+      database?.status === DependencyStatus.OK
+    ) {
+      const maintenance = await this.probeMaintenanceReadiness();
+      if (maintenance) dependencies.push(maintenance);
+    }
+
     const blocked = dependencies.some(
       (dependency) =>
         dependency.kind === DependencyKind.REQUIRED &&
@@ -273,6 +298,7 @@ export class HealthService {
       ),
       Promise.resolve(this.probeClockSkewDiagnostics()),
       this.probePoolDiagnostics(),
+      this.probeMaintenanceDiagnostics(),
     );
     const dependencies = await Promise.all(diagProbes);
 
@@ -724,6 +750,85 @@ export class HealthService {
           status: DependencyStatus.DEGRADED,
           reason:
             snapshot.reason ?? DATABASE_POOL_REASONS.metricsUnavailable,
+        };
+    }
+  }
+
+  /**
+   * Readiness view of database maintenance health.
+   *
+   * Returns a dependency only while the monitor's sustained-critical latch
+   * is set — a single degraded sample never drains a replica from the load
+   * balancer. Absent otherwise, so readiness stays silent about maintenance
+   * until it actually blocks.
+   */
+  private async probeMaintenanceReadiness(): Promise<DependencyResult | null> {
+    const monitor = this.maintenanceMonitor;
+    if (!monitor || !monitor.enabled) return null;
+    const snapshot = await monitor.sample();
+    if (!monitor.blocksReadiness()) return null;
+    return {
+      name: "database_maintenance",
+      kind: DependencyKind.REQUIRED,
+      status: DependencyStatus.ERROR,
+      reason: DATABASE_MAINTENANCE_REASONS.bloatCritical,
+      durationMs: 0,
+      maintenance: snapshot,
+    };
+  }
+
+  /**
+   * Diagnostics view of database maintenance health: the full bounded snapshot —
+   * table bloat, vacuum/analyze age, dead tuples, thresholds, hysteresis state,
+   * and the runbook link. Numbers and stable codes only.
+   *
+   * REQUIRED only while the sustained-critical latch actually gates
+   * readiness, so the diagnostics verdict never disagrees with readiness
+   * about maintenance.
+   */
+  private async probeMaintenanceDiagnostics(): Promise<DependencyResult> {
+    const monitor = this.maintenanceMonitor;
+    if (!monitor || !monitor.enabled) {
+      return {
+        name: "database_maintenance",
+        kind: DependencyKind.OPTIONAL,
+        status: DependencyStatus.NOT_CONFIGURED,
+        reason: DATABASE_MAINTENANCE_REASONS.monitorAbsent,
+      };
+    }
+    const snapshot = await monitor.sample();
+    const blocking = monitor.blocksReadiness();
+    const base = {
+      name: "database_maintenance",
+      kind: blocking ? DependencyKind.REQUIRED : DependencyKind.OPTIONAL,
+      durationMs: 0,
+      maintenance: snapshot,
+    };
+    switch (snapshot.status) {
+      case "ok":
+        return { ...base, status: DependencyStatus.OK };
+      case "warning":
+        return {
+          ...base,
+          status: DependencyStatus.DEGRADED,
+          reason: DATABASE_MAINTENANCE_REASONS.bloatWarning,
+        };
+      case "critical":
+        return {
+          ...base,
+          status: blocking ? DependencyStatus.ERROR : DependencyStatus.DEGRADED,
+          reason: blocking
+            ? DATABASE_MAINTENANCE_REASONS.bloatCritical
+            : DATABASE_MAINTENANCE_REASONS.bloatCritical,
+        };
+      case "disabled":
+        return { ...base, status: DependencyStatus.DISABLED };
+      default:
+        return {
+          ...base,
+          status: DependencyStatus.DEGRADED,
+          reason:
+            snapshot.reason ?? DATABASE_MAINTENANCE_REASONS.metricsUnavailable,
         };
     }
   }

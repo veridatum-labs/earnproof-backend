@@ -11,6 +11,7 @@
 
 import type { ClockSkewSnapshot } from "./clock-skew-monitor.service";
 import type { DatabasePoolSnapshot } from "./database-pool-monitor.service";
+import type { DatabaseMaintenanceSnapshot } from "./database-maintenance-monitor.service";
 
 /**
  * Stable, safe status codes.
@@ -88,6 +89,12 @@ export interface DependencyResult {
    * a connection string, credential, host, or query text.
    */
   pool?: DatabasePoolSnapshot;
+  /**
+   * Database maintenance detail, present only on the `database_maintenance` entry.
+   * Table bloat ratios, vacuum/analyze age, dead tuple counts, thresholds,
+   * hysteresis state and a runbook link — never tenant data or query text.
+   */
+  maintenance?: DatabaseMaintenanceSnapshot;
 }
 
 /** Privacy-safe view of one circuit for the diagnostics endpoint. */

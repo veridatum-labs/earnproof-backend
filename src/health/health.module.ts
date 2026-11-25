@@ -11,6 +11,7 @@ import { HealthController } from "./health.controller";
 import { IncidentsController } from "./incidents.controller";
 import { HealthService } from "./health.service";
 import { DatabasePoolMonitorService } from "./database-pool-monitor.service";
+import { DatabaseMaintenanceMonitorService } from "./database-maintenance-monitor.service";
 import { ProtocolPauseController } from "./protocol-pause.controller";
 import { ProtocolPauseService } from "./protocol-pause.service";
 import { CapabilitiesController } from "./capabilities.controller";
@@ -21,6 +22,7 @@ import { CapabilitiesController } from "./capabilities.controller";
   providers: [
     HealthService,
     DatabasePoolMonitorService,
+    DatabaseMaintenanceMonitorService,
     DeploymentMetadataService,
     ProtocolPauseService,
     PauseAcknowledgementService,
@@ -37,6 +39,7 @@ import { CapabilitiesController } from "./capabilities.controller";
     ClockSkewMonitorService,
     ProcessPressureMonitorService,
     ContractIdentityService,
+    DatabaseMaintenanceMonitorService,
   ],
 })
 export class HealthModule {}

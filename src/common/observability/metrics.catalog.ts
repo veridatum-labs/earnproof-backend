@@ -42,6 +42,13 @@ export const METRIC_NAMES = {
   databasePoolTimeoutsTotal: "database_pool_timeouts_total",
   databasePoolWaitDurationMs: "database_pool_wait_duration_ms",
 
+  // ─── Database maintenance health ────────────────────────────────────────
+  databaseMaintenanceBloatRatio: "database_maintenance_bloat_ratio",
+  databaseMaintenanceDeadTuples: "database_maintenance_dead_tuples",
+  databaseMaintenanceLastVacuumAgeSeconds: "database_maintenance_last_vacuum_age_seconds",
+  databaseMaintenanceLastAnalyzeAgeSeconds: "database_maintenance_last_analyze_age_seconds",
+  databaseMaintenanceStatusTotal: "database_maintenance_status_total",
+
   // ─── Verification outcomes ──────────────────────────────────────────────
   verificationsTotal: "verifications_total",
 
@@ -179,6 +186,48 @@ export function registerCoreMetrics(registry: MetricsRegistry): void {
     labelNames: ["pool_status"],
     // Bracketed around the 100 ms warn and 500 ms critical thresholds.
     buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000],
+  });
+
+  // ─── Database maintenance health ────────────────────────────────────────
+  // Per-table maintenance metrics from pg_stat_user_tables. Labels are schema
+  // and table name (both bounded by the database schema, not tenant data).
+  // The status counter tracks overall maintenance health state.
+  registry.registerHistogram({
+    name: METRIC_NAMES.databaseMaintenanceBloatRatio,
+    help: "Table bloat ratio (dead tuples / live tuples) per table.",
+    labelNames: ["schema", "table"],
+    // Ratios from 0 to 1, with buckets around warn (0.1) and critical (0.3) thresholds.
+    buckets: [0.01, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0],
+  });
+
+  registry.registerHistogram({
+    name: METRIC_NAMES.databaseMaintenanceDeadTuples,
+    help: "Dead tuple count per table.",
+    labelNames: ["schema", "table"],
+    // Buckets around warn (10k) and critical (100k) thresholds.
+    buckets: [100, 1_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000],
+  });
+
+  registry.registerHistogram({
+    name: METRIC_NAMES.databaseMaintenanceLastVacuumAgeSeconds,
+    help: "Seconds since last vacuum (autovacuum or manual) per table.",
+    labelNames: ["schema", "table"],
+    // Buckets around warn (24h) and critical (7d) thresholds.
+    buckets: [60, 300, 3_600, 21_600, 86_400, 172_800, 604_800, 1_209_600, 2_592_000],
+  });
+
+  registry.registerHistogram({
+    name: METRIC_NAMES.databaseMaintenanceLastAnalyzeAgeSeconds,
+    help: "Seconds since last analyze (autoanalyze or manual) per table.",
+    labelNames: ["schema", "table"],
+    // Buckets around warn (24h) and critical (7d) thresholds.
+    buckets: [60, 300, 3_600, 21_600, 86_400, 172_800, 604_800, 1_209_600, 2_592_000],
+  });
+
+  registry.registerCounter({
+    name: METRIC_NAMES.databaseMaintenanceStatusTotal,
+    help: "Database maintenance health status.",
+    labelNames: ["status"],
   });
 
   // ─── Verification outcomes ──────────────────────────────────────────────

@@ -115,6 +115,38 @@ export const ALLOWED_METRIC_LABELS = {
     "unsupported_charset",
     "unsupported_content_type",
   ],
+
+  /** Database schema name. Bounded by the database schema, not tenant data. */
+  schema: [
+    "public",
+    "other",
+  ],
+
+  /** Database table name. Bounded by the database schema, not tenant data. */
+  table: [
+    "users",
+    "organizations",
+    "issuers",
+    "payments",
+    "proofs",
+    "attestations",
+    "webhooks",
+    "api_keys",
+    "auth_sessions",
+    "trusted_sources",
+    "supported_assets",
+    "idempotency_records",
+    "verification_events",
+    "anchoring_intents",
+    "proof_sharing_events",
+    "credential_quarantines",
+    "purpose_declarations",
+    "verification_policies",
+    "other",
+  ],
+
+  /** Maintenance health status. */
+  status: ["ok", "warning", "critical", "unknown", "disabled"],
 } as const;
 
 export type MetricLabelName = keyof typeof ALLOWED_METRIC_LABELS;
