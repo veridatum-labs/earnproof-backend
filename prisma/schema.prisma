@@ -1424,6 +1424,9 @@ model Webhook {
   secretVersions     WebhookSecretVersion[]
   tlsProbes          WebhookTlsProbe[]
   verificationChallenges WebhookVerificationChallenge[]
+  revision            Int            @default(0)
+  deliveryPaused      Boolean        @default(false)
+  deliveryPauseReason String?        @db.VarChar(64)
 
   @@index([organizationId, status])
   @@index([organizationId, createdAt, id])
@@ -4801,4 +4804,81 @@ model ContractEventApplied {
 
   @@id([streamKey, eventId])
   @@index([streamKey, ledger])
+}
+
+
+// ---------------------------------------------------------------------------
+// Webhook payload commitment receipts (#446)
+// Deliberately relation-free (same rationale as WebhookDeliveryReceipt) to
+// avoid TypeScript recursive type stack overflows during `tsc --noEmit`.
+// ---------------------------------------------------------------------------
+
+model WebhookPayloadCommitmentReceipt {
+  id                String   @id @default(cuid())
+  organizationId    String
+  webhookId         String
+  eventId           String
+  lineageId         String
+  eventType         String
+  commitmentVersion String   @default("v1")
+  /// "sha256:<hex>" over canonical delivery metadata + canonical payload.
+  /// Deterministic across retries; never includes signing secrets.
+  commitmentHash    String
+  payloadSha256     String
+  payloadByteLength Int
+  /// Safe metadata only (no secrets, no raw sensitive payload fields).
+  canonicalMetadata Json
+  firstAttemptedAt  DateTime
+  lastAttemptedAt   DateTime
+  attemptCount      Int      @default(1)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([organizationId, webhookId, lineageId])
+  @@index([organizationId, webhookId, createdAt])
+  @@index([organizationId, eventId])
+  @@index([commitmentHash])
+}
+
+// ---------------------------------------------------------------------------
+// Webhook endpoint ownership transfer workflow (#447)
+// Deliberately relation-free. `openWebhookKey` enforces at most one open
+// transfer per webhook at the database level.
+// ---------------------------------------------------------------------------
+
+enum WebhookOwnershipTransferStatus {
+  PENDING_ACCEPTANCE
+  COMPLETED
+  CANCELLED
+  ROLLED_BACK
+  EXPIRED
+}
+
+model WebhookOwnershipTransfer {
+  id                   String                         @id @default(cuid())
+  webhookId            String
+  sourceOrganizationId String
+  targetOrganizationId String
+  initiatedById        String
+  acceptedById         String?
+  cancelledById        String?
+  status               WebhookOwnershipTransferStatus @default(PENDING_ACCEPTANCE)
+  /// Equals `webhookId` while PENDING_ACCEPTANCE, NULL once terminal.
+  openWebhookKey       String?                        @unique
+  /// Optimistic concurrency guard matching Webhook.revision at initiation.
+  expectedRevision     Int
+  previousPausedState  Boolean                        @default(false)
+  previousStatus       ResourceStatus                 @default(ACTIVE)
+  /// Non-secret keyId of the newly minted WebhookSecretVersion on completion.
+  rotatedKeyId         String?
+  expiresAt            DateTime
+  completedAt          DateTime?
+  cancelledAt          DateTime?
+  createdAt            DateTime                       @default(now())
+  updatedAt            DateTime                       @updatedAt
+
+  @@index([webhookId, createdAt])
+  @@index([sourceOrganizationId, status])
+  @@index([targetOrganizationId, status])
+  @@index([status, expiresAt])
 }
