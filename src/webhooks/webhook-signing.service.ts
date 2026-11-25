@@ -156,3 +156,100 @@ export class WebhookSigningService {
     return match ? match[1] : null;
   }
 }
+
+/**
+ * Webhook signing timestamp skew policy (#444).
+ *
+ * Versioned envelope with a stable delivery identity: the signed payload is
+ * `v1.<deliveryId>.<timestampSec>.<body>`, so retries keep the same deliveryId
+ * while updating the attempt timestamp. Timestamps are checked against a
+ * configurable past/future skew window (inclusive of the boundary) and HMAC
+ * digests are compared in constant time over equal-length buffers.
+ */
+
+export interface WebhookSkewPolicy {
+  maxPastSkewSeconds: number;
+  maxFutureSkewSeconds: number;
+}
+
+export interface SignedWebhookEnvelope {
+  version: "v1";
+  deliveryId: string;
+  timestampSec: number;
+  signature: string;
+}
+
+export const DEFAULT_WEBHOOK_SKEW_POLICY: WebhookSkewPolicy = {
+  maxPastSkewSeconds: 300,
+  maxFutureSkewSeconds: 60,
+};
+
+export function buildSigningPayload(
+  version: string,
+  deliveryId: string,
+  timestampSec: number,
+  rawBody: string | Buffer,
+): string {
+  const bodyString = Buffer.isBuffer(rawBody) ? rawBody.toString("utf8") : rawBody;
+  return `${version}.${deliveryId}.${timestampSec}.${bodyString}`;
+}
+
+export function signWebhookPayload(params: {
+  secret: string;
+  deliveryId: string;
+  rawBody: string | Buffer;
+  timestampSec?: number;
+  nowMs?: number;
+}): SignedWebhookEnvelope {
+  const version = "v1" as const;
+  const nowMs = params.nowMs ?? Date.now();
+  const timestampSec = params.timestampSec ?? Math.floor(nowMs / 1000);
+  const payload = buildSigningPayload(version, params.deliveryId, timestampSec, params.rawBody);
+  const signature = createHmac("sha256", params.secret).update(payload, "utf8").digest("hex");
+
+  return {
+    version,
+    deliveryId: params.deliveryId,
+    timestampSec,
+    signature,
+  };
+}
+
+export function verifyWebhookSignature(params: {
+  secret: string;
+  deliveryId: string;
+  timestampSec: number;
+  signatureHex: string;
+  rawBody: string | Buffer;
+  policy?: WebhookSkewPolicy;
+  nowMs?: number;
+}): { valid: boolean; reason?: string } {
+  const policy = params.policy ?? DEFAULT_WEBHOOK_SKEW_POLICY;
+  const nowSec = Math.floor((params.nowMs ?? Date.now()) / 1000);
+
+  if (!Number.isInteger(params.timestampSec)) {
+    return { valid: false, reason: "INVALID_TIMESTAMP" };
+  }
+
+  const ageSeconds = nowSec - params.timestampSec;
+  if (ageSeconds > policy.maxPastSkewSeconds) {
+    return { valid: false, reason: "STALE_TIMESTAMP" };
+  }
+
+  if (params.timestampSec - nowSec > policy.maxFutureSkewSeconds) {
+    return { valid: false, reason: "FUTURE_TIMESTAMP" };
+  }
+
+  const payload = buildSigningPayload("v1", params.deliveryId, params.timestampSec, params.rawBody);
+  const expectedHex = createHmac("sha256", params.secret).update(payload, "utf8").digest("hex");
+
+  const expectedBuf = Buffer.from(expectedHex, "hex");
+  const providedBuf = Buffer.from(params.signatureHex, "hex");
+
+  if (expectedBuf.length === 0 || expectedBuf.length !== providedBuf.length) {
+    return { valid: false, reason: "INVALID_SIGNATURE_LENGTH" };
+  }
+
+  const matched = timingSafeEqual(expectedBuf, providedBuf);
+  return matched ? { valid: true } : { valid: false, reason: "SIGNATURE_MISMATCH" };
+}

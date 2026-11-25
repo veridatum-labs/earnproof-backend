@@ -1,7 +1,7 @@
 module.exports = {
   moduleFileExtensions: ["js", "json", "ts"],
   rootDir: ".",
-  testRegex: ".*\\.spec\\.ts$",
+  testRegex: ".*\\.(spec|test)\\.ts$",
   // The integration suite has its own config (jest.integration.config.js): it
   // needs a real PostgreSQL server, and the unit suite must stay runnable
   // without one. Ignored explicitly rather than relying on the `.int-spec.ts`

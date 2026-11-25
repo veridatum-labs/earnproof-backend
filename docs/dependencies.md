@@ -344,3 +344,13 @@ Every relative link in this document is checked two ways:
 
 A link to a path that has moved or never existed fails the build rather than
 quietly rotting.
+
+## Dependency provenance and license policy (#442, #443)
+
+Release dependencies are verified statically from `package-lock.json` and registry metadata — never by running `npm install`, `preinstall`, `install`, or `postinstall` hooks.
+
+**Provenance** (`scripts/verify-provenance.js`): each locked package must resolve to an allowed registry, carry a `sha512-...` integrity hash, preserve package identity, and include a provenance attestation unless covered by a non-expired, owner-reviewed exception in `config/provenance-exceptions.json`. Failures fail closed.
+
+**License policy** (`scripts/license-policy.js`): runtime dependencies (those without `dev: true`) are inspected separately from dev dependencies. A runtime package with a denied or unknown license is a violation unless covered by a valid, non-expired override with `owner`, `rationale`, and `expiresAt`. The attribution report sanitizes registry tokens and local filesystem paths and never emits credentials.
+
+**Fixture scanning** (`scripts/scan-fixtures.js`): fixture and snapshot files are read as text/data only — never `require()`d, imported, or executed — and flagged for private-key blocks, cloud/API tokens, or production endpoints unless matched by an allowlist entry that documents a rationale.

@@ -475,3 +475,19 @@ to every local user in the process list.
 - [Architecture](architecture.md) — where webhooks sit in the system.
 - [Webhook TLS posture](webhook-tls-posture.md) — scheduled certificate and
   protocol probes of webhook endpoints.
+
+## v1 signing envelope and timestamp skew policy (#444)
+
+Outbound webhooks are signed over the versioned envelope
+
+    v1.<deliveryId>.<timestampSec>.<body>
+
+where `deliveryId` is a stable delivery identity (retries keep the same `deliveryId` while rotating the attempt `timestampSec`) and `timestampSec` is the Unix timestamp in seconds. The signature is `HMAC-SHA256(secret, envelope)` hex-encoded.
+
+Verification (`verifyWebhookSignature` in `src/webhooks/webhook-signing.service.ts`):
+
+1. Rejects a non-integer `timestampSec` (`INVALID_TIMESTAMP`).
+2. Rejects payloads older than `maxPastSkewSeconds` (`STALE_TIMESTAMP`) or farther in the future than `maxFutureSkewSeconds` (`FUTURE_TIMESTAMP`). Both bounds are inclusive: a timestamp exactly at the boundary is accepted.
+3. Computes the expected digest over the same envelope and compares it with the provided signature using `crypto.timingSafeEqual` over equal-length buffers (`SIGNATURE_MISMATCH` or `INVALID_SIGNATURE_LENGTH`).
+
+Default policy: `maxPastSkewSeconds: 300`, `maxFutureSkewSeconds: 60`. The receiver (`scripts/webhook-receiver`) parses the `deliveryId` and `timestampSec` fields/headers and verifies with `verifyWebhookSignature` before reserving the delivery ID, so a retry reuses the same `deliveryId` with an updated attempt timestamp.
