@@ -30,6 +30,7 @@ import { PaymentEligibilityService } from "./payment-eligibility.service";
 import { PaymentClassificationHistoryService } from "./payment-classification-history.service";
 import { PaymentAddressCipher } from "../common/crypto/payment-address-cipher";
 import { PaymentAccountResolver } from "./payment-account.resolver";
+import { PaymentTombstoneService } from "./payment-tombstone.service";
 import { throwIfRequestAborted } from "../common/request-context/request-abort";
 
 /**
@@ -53,6 +54,7 @@ export class PaymentsService {
     private readonly classificationHistoryService: PaymentClassificationHistoryService,
     private readonly eligibility: PaymentEligibilityService,
     @Optional() private readonly accounts?: PaymentAccountResolver,
+    private readonly tombstones: PaymentTombstoneService,
   ) {
     this.paymentEncryptionKeyring = new PaymentEncryptionKeyringService(
       configService,
@@ -193,6 +195,20 @@ export class PaymentsService {
     const syncedPaymentIds: string[] = [];
 
     for (const payment of incomingPayments) {
+      // A payment removed by retention or privacy must not be silently
+      // reingested by a later Horizon sync while its deletion tombstone is
+      // active. Tombstones are owner scoped and keyed on a salted commitment,
+      // so no deleted payment payload is retained.
+      const blocked = await this.tombstones.shouldBlockReingestion({
+        ownerId: userId,
+        accountId: payment.destinationAddress,
+        paymentId: payment.operationId,
+      });
+      if (blocked) {
+        skipped += 1;
+        continue;
+      }
+
       const isEligible = supportedAssetKeys.has(
         canonicalAssetId({
           network: this.stellarNetwork,

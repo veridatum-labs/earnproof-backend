@@ -872,6 +872,27 @@ model Payment {
   @@index([classification])
 }
 
+/// Tombstone recorded when a payment is deleted by retention or a privacy
+/// request, so a later Horizon sync cannot silently reingest the same payment.
+///
+/// Only a keyed commitment over (ownerId, accountId, paymentId) is stored —
+/// never the raw memo, wallet address, signature, amount, or any other deleted
+/// payment payload. The commitment is collision resistant and owner scoped, so
+/// account rotation or replay after retention deletion is blocked while the
+/// tombstone is active, and reingestion is only possible after `expiresAt` if
+/// policy permits.
+model PaymentDeletionTombstone {
+  id                       String   @id @default(cuid())
+  ownerId                  String
+  sourceIdentityCommitment String
+  reason                   String   @default("retention")
+  expiresAt                DateTime
+  createdAt                DateTime @default(now())
+
+  @@unique([ownerId, sourceIdentityCommitment])
+  @@index([ownerId, expiresAt])
+}
+
 /// One evaluation of a payment's eligibility under a versioned policy.
 /// Exactly one decision per payment is active; superseded decisions are kept
 /// for audit. Stores derived factors and reason codes only: never a memo,

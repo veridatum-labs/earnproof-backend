@@ -17,9 +17,26 @@ import { REQUEST_ID_HEADER } from "../interceptors/request-id.interceptor";
 import { TransactionRetryExhaustedError } from "../../database/transaction-retry.service";
 import { randomBytes } from "crypto";
 import { RequestAbortedError } from "../request-context/request-abort";
+import {
+  scanRenderedOutputForSentinels,
+  type SentinelSpec,
+} from "../observability/pii-leak-scanner";
 
 /** Non-standard but widely used status for "client closed request". */
 const CLIENT_CLOSED_REQUEST = 499;
+
+/**
+ * Request shape extended with optional PII sentinels for the current request.
+ * Handlers that process wallet addresses, tokens, memos, signatures, or amounts
+ * attach sentinels here so the exception filter can confirm none escape into a
+ * rendered error response. Absent sentinels means no scanning. Kept as a local
+ * interface (rather than a global Express augmentation) to avoid the ESLint
+ * `no-namespace` rule while preserving the same request-scoped contract.
+ */
+interface SentinelRequest extends Request {
+  requestId?: string;
+  piiSentinels?: readonly SentinelSpec[];
+}
 
 // ─── Prisma error-code buckets ───────────────────────────────────────────────
 // P2002 – unique constraint violation
@@ -66,7 +83,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
-    const req = ctx.getRequest<Request & { requestId?: string }>();
+    const req = ctx.getRequest<SentinelRequest>();
     const res = ctx.getResponse<Response>();
 
     const requestId = this.resolveRequestId(req);
@@ -90,6 +107,45 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     }
     if (currentRevision !== undefined) {
       body.currentRevision = currentRevision;
+    }
+
+    // Scan every rendered output for registered sentinels. A finding reports the
+    // emitting path and category, never the secret itself. Handlers opt in by
+    // attaching `req.piiSentinels`; without sentinels nothing is scanned and the
+    // envelope is unchanged.
+    const pathLabel = `${req.method} ${req.route?.path ?? req.url}`;
+    const sentinels = req.piiSentinels;
+    if (sentinels?.length) {
+      const logFindings = scanRenderedOutputForSentinels({
+        pathLabel,
+        outputKind: "STRUCTURED_LOG",
+        payload: this.safeMessage(exception),
+        sentinels,
+        correlationId: requestId,
+      });
+      for (const finding of logFindings) {
+        this.logger.warn(
+          `PII leak detected [${finding.category}] at ${finding.pathLabel} (corr ${finding.correlationId})`,
+        );
+      }
+
+      const responseFindings = scanRenderedOutputForSentinels({
+        pathLabel,
+        outputKind: "ERROR_RESPONSE",
+        payload: body,
+        sentinels,
+        correlationId: requestId,
+      });
+      if (responseFindings.length > 0) {
+        for (const finding of responseFindings) {
+          this.logger.warn(
+            `PII leak in error response [${finding.category}] at ${finding.pathLabel} (corr ${finding.correlationId})`,
+          );
+        }
+        // Never echo a secret to the client: neutralize the message while
+        // keeping the stable code, status, and correlation identifier.
+        body.message = "An unexpected error occurred. Please try again later.";
+      }
     }
 
     // Always echo the request-ID back so clients correlate even on errors that

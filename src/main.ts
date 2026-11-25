@@ -46,6 +46,7 @@ async function bootstrap() {
       proxyHops: configService.getOrThrow<number>("trustProxyHops"),
       trustedProxyCidrs: configService.getOrThrow<string[]>("trustedProxyCidrs"),
     },
+    hostValidation: configService.get("hostValidation"),
   });
 
   // ── Swagger / OpenAPI ────────────────────────────────────────────────────
